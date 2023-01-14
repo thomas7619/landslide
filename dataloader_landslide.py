@@ -40,6 +40,8 @@ class DataGenerator(tensorflow.keras.utils.Sequence):
         if self.type=='test':
             self.path_in = glob.glob('%s/*png' % (self.dataset_img))
             self.path_in.sort()
+            self.path_in_dem = glob.glob('%s/*png' % (self.dataset_dem))
+            self.path_in_dem.sort()
             self.path_out_classes = None
         else:
             self.path_in = glob.glob('%s/*png' % (self.dataset_img))

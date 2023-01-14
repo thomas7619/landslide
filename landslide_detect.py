@@ -126,10 +126,10 @@ DEF_PATH_SAVE='./save'
 DEF_PATH_PRETRAIN=''
 DEF_README='readme_model.txt'
 DEF_INITIAL_LR=0.001
-DEF_FILTERS=64
+DEF_FILTERS=32
 DEF_DECAY_STEPS = 100000000
 DEF_DECAY_RATE = 0.9
-DEF_CUSTOM_OBJECTS={'categorical_focal_loss':categorical_focal_loss,'binary_focal_loss':binary_focal_loss,'categorical_focal_loss_fixed':categorical_focal_loss(alpha=[[.125, 1.8, 1.,1.6,0.16,1.7,.11]], gamma=2.)}
+DEF_CUSTOM_OBJECTS={'categorical_focal_loss':categorical_focal_loss,'binary_focal_loss':binary_focal_loss,'categorical_focal_loss_fixed':categorical_focal_loss(alpha=[[.125, 1.8, 1.,1.6,0.16,1.7,.11]], gamma=2.),'binary_focal_loss_fixed':binary_focal_loss(gamma=2., alpha=.25)}
 
 alpha = [1.62916784,0.49345255,0.94459565,3.32227727]
 sumalpha = np.sum(alpha)
@@ -175,7 +175,7 @@ class landslide():
                  initial_lr=DEF_INITIAL_LR,
                  decay_rate=DEF_DECAY_RATE,
                  decay_steps=DEF_DECAY_STEPS,
-                 gf=DEF_FILTERS):
+                 gf=DEF_FILTERS,concaten_dem_only=False,concaten_ima_only=False):
 
         self.dataset_img= dataset_img
         self.dataset_dem= dataset_dem
@@ -192,9 +192,11 @@ class landslide():
         self.img_shape_in = (self.img_rows, self.img_cols, self.channels_in)
         self.img_shape_dem = (self.img_rows, self.img_cols, 1)
         self.initial_lr = initial_lr
-        self.decay_rate = 0.9
-        self.decay_steps = 40000
+        self.decay_rate = decay_rate
+        self.decay_steps = decay_steps
         self.filepath_save = filepath_save
+        self.concaten_ima_only = concaten_ima_only
+        self.concaten_dem_only = concaten_dem_only
         # Configure data loader
 
         # Number of filters in the first layer of G and D
@@ -286,14 +288,38 @@ class landslide():
         b1 = conv_block(bridge, gf * 8,pool=False)
 
         """ Decoder """
-        x = attention_up_and_concate(b1,Concatenate(axis=-1)([x4i, x4d]))
-        x = conv_block(x, 4 * gf, pool=False)
-        x = attention_up_and_concate(x, Concatenate(axis=-1)([x3i, x3d]))
-        x = conv_block(x, 3 * gf, pool=False)
-        x = attention_up_and_concate(x,Concatenate(axis=-1)([x2i, x2d]))
-        x = conv_block(x, 2 * gf, pool=False)
-        x = attention_up_and_concate(x,Concatenate(axis=-1)([x1i, x1d]))
-        x = conv_block(x, 2 * gf, pool=False)
+        if self.concaten_dem_only is True:
+            """ Concaten DEM only """
+            x = attention_up_and_concate(b1,x4d)
+            x = conv_block(x, 4 * gf, pool=False)
+            x = attention_up_and_concate(x, x3d)
+            x = conv_block(x, 3 * gf, pool=False)
+            x = attention_up_and_concate(x,x2d)
+            x = conv_block(x, 2 * gf, pool=False)
+            x = attention_up_and_concate(x,x1d)
+            x = conv_block(x, 2 * gf, pool=False)
+        elif self.concaten_ima_only is True:
+            """ Concaten Image only """
+            x = attention_up_and_concate(b1,x4i)
+            x = conv_block(x, 4 * gf, pool=False)
+            x = attention_up_and_concate(x, x3i)
+            x = conv_block(x, 3 * gf, pool=False)
+            x = attention_up_and_concate(x,x2i)
+            x = conv_block(x, 2 * gf, pool=False)
+            x = attention_up_and_concate(x,x1i)
+            x = conv_block(x, 2 * gf, pool=False)
+        else:
+            """ Concaten Image and DEM """
+            x = attention_up_and_concate(b1,Concatenate(axis=-1)([x4i, x4d]))
+            x = conv_block(x, 4 * gf, pool=False)
+            x = attention_up_and_concate(x, Concatenate(axis=-1)([x3i, x3d]))
+            x = conv_block(x, 3 * gf, pool=False)
+            x = attention_up_and_concate(x,Concatenate(axis=-1)([x2i, x2d]))
+            x = conv_block(x, 2 * gf, pool=False)
+            x = attention_up_and_concate(x,Concatenate(axis=-1)([x1i, x1d]))
+            x = conv_block(x, 2 * gf, pool=False)
+
+
 
 
         """ Output layer """
@@ -307,8 +333,8 @@ class landslide():
         # Parameters
         start_time = datetime.datetime.now()
         callbacks = [
-            tf.keras.callbacks.EarlyStopping(patience=20,monitor = 'val_loss'),
-            tf.keras.callbacks.ModelCheckpoint(filepath='%s/model-{epoch:05d}-{loss:.5f}-{val_loss:.5f}.h5'%self.filepath_save,
+            tf.keras.callbacks.EarlyStopping(patience=435,monitor = 'val_loss'),
+            tf.keras.callbacks.ModelCheckpoint(filepath='%s/models/model-{epoch:05d}-{loss:.5f}-{val_loss:.5f}.h5'%self.filepath_save,
                                                save_best_only=False,
                                                save_weights_only=False,
                                                monitor = 'accuracy',
@@ -384,6 +410,8 @@ if __name__ == '__main__':
                         help="Decay steps (default : %d)"%DEF_DECAY_STEPS)
     parser.add_argument("--decay_rate", type=float, default=DEF_DECAY_RATE,
                         help="Decay rate (default : %f)"%DEF_DECAY_RATE)
+    parser.add_argument("--concat_ima", help="Concatene image only in decoder (instead of images and DEM by default)",action="store_true")
+    parser.add_argument("--concat_dem", help="Concatene DEM only in decoder (instead of images and DEM by default)",action="store_true")
     parser.add_argument("--note", type=str, default='',
                         help="Personal note for the readme file ")
 
@@ -407,6 +435,8 @@ if __name__ == '__main__':
     decay_steps=args.decay_steps
     decay_rate=args.decay_rate
     initial_lr=args.initial_lr
+    concaten_ima_only = args.concat_ima
+    concaten_dem_only = args.concat_dem
 
     pretrain=args.pretrain
     config = tf.ConfigProto()
@@ -423,6 +453,12 @@ if __name__ == '__main__':
 #    gan = Cloudy2free(dataset_name=dataset_name)
     if not os.path.exists(path_model):
         os.makedirs(path_model)
+    if not os.path.exists('%s/models'%path_model):
+        os.makedirs('%s/models'%path_model)
+    if not os.path.exists('%s/python'%path_model):
+        os.makedirs('%s/python'%path_model)
+    comm = 'cp *py %s/python/'%path_model
+    os.system(comm)
     name_readme='%s/%s'%(path_model,DEF_README)
     fid = open(name_readme, "w")
     fid.write('--------------------\n')
@@ -442,6 +478,14 @@ if __name__ == '__main__':
     fid.write('Losses\n')
     fid.write('--------------------\n')
     fid.write('--------------------\n')
+    if concaten_dem_only is True:
+        fid.write('Use image only in decoder\n')
+    elif concaten_ima_only is True:
+        fid.write('Use DEM only in decoder\n')
+    else:
+        fid.write('Use Images and DEM in decoder\n')
+
+
     if pretrain != '':
         fid.write('Pretrain\n')
         fid.write('--------------------\n')
@@ -470,7 +514,7 @@ if __name__ == '__main__':
                  initial_lr=initial_lr,
                  decay_rate=decay_rate,
                  decay_steps=decay_steps,
-                 gf=gf)
+                 gf=gf,concaten_ima_only=concaten_ima_only,concaten_dem_only=concaten_dem_only)
     if os.path.exists(pretrain):
         print('---------------------------------')
         print('load pretrain model %s'%pretrain)
@@ -481,7 +525,8 @@ if __name__ == '__main__':
             decay_steps=decay_steps,
             decay_rate=decay_rate)
         optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule,beta_1=0.9,beta_2=0.999)
-        gan.generator.compile(loss=binary_focal_loss(gamma=2., alpha=.25),
+        network.generator.compile(loss=binary_focal_loss(gamma=2., alpha=.25),
+                               metrics=['accuracy'],
                                loss_weights=[1],
                                optimizer=optimizer)
         print('---------------------------------')
@@ -505,7 +550,7 @@ if __name__ == '__main__':
 
     history = network.train(epochs=epochs, batch_size=batch_size)
     np.save("%s/history.npy"%path_model,history.history)
-
+    #hist=np.load("%s/history.npy"%path_model,allow_pickle=True).item()
 
  #   else:
  #       gan.train_save(epochs=epochs, batch_size=batch_size, sample_interval=save_interval)
