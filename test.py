@@ -13,7 +13,7 @@ from tensorflow.keras.layers import BatchNormalization, Activation, ZeroPadding2
 #from keras.layers.advanced_activations import LeakyReLU
 from tensorflow.keras.layers import LeakyReLU,ReLU,Add, PReLU,add
 from tensorflow.keras.layers import UpSampling2D, Conv2D, MaxPooling2D, Conv2DTranspose, SeparableConv2D
-from tensorflow.keras.models import Sequential, Model, load_model
+from tensorflow.keras.models import Sequential, Model, load_model,save_model
 from tensorflow.keras.optimizers import schedules
 from tensorflow.keras.layers import MaxPool2D,multiply,Lambda
 
@@ -25,7 +25,7 @@ from keras import backend as K
 
 #from data_loader_before_generator import DataLoader
 
-from dataloader_landslide import *
+from dataloader_landslide import DataGenerator_oldnorm,DataGenerator
 #from losses import *
 #from losses import VGG_LOSS
 
@@ -33,6 +33,7 @@ import numpy as np
 import os
 from  skimage import io
 
+DEF_TMPO='.tmpomodel.h5'
 DEF_SEPARATOR_classes='_land'
 DEF_SEPARATOR_land='_land'
 DEF_SEPARATOR_gt='_gt'
@@ -49,16 +50,19 @@ list_out = [0,1,2,3,4,5,255]
 #       0.0, 1.0, 0.0)}
 def vide_loss(x1,x2):
     return x1+x2
-
 DEF_CUSTOM_OBJECTS={'binary_focal_loss':vide_loss,
                     'binary_focal_loss_fixed':vide_loss,
                     'categorical_focal_loss':vide_loss,
                     'categorical_focal_loss_fixed':vide_loss,
-                    'myloss':vide_loss}
+                    'myloss':vide_loss,'vide_loss':vide_loss}
 
+
+def change_model(model_name,newname):
+    model=tf.keras.models.load_model(model_name,custom_objects=DEF_CUSTOM_OBJECTS)
+    tf.keras.models.save_model(model,newname)
 
 class test():
-    def __init__(self,model_name,dataset_name_ima,dataset_name_dem,img_rows=DEF_ROWS,img_cols=DEF_COLS,channels_out=DEF_CH_OUT,channels_in=DEF_CH_IN,batch_size=DEF_BATCH_SIZE):
+    def __init__(self,model_name,dataset_name_ima,dataset_name_dem,img_rows=DEF_ROWS,img_cols=DEF_COLS,channels_out=DEF_CH_OUT,channels_in=DEF_CH_IN,batch_size=DEF_BATCH_SIZE,oldnorm=False):
         # Input shape
         self.model_name=model_name
         self.img_rows = img_rows
@@ -71,17 +75,29 @@ class test():
         self.dataset_name_ima = dataset_name_ima
         self.dataset_name_dem = dataset_name_dem
         self.batch_size=batch_size
+        self.oldnorm=oldnorm
         print('charging model')
         self.model=tf.keras.models.load_model(model_name, custom_objects=DEF_CUSTOM_OBJECTS)
         print('Done')
-        self.data_generator = DataGenerator(self.dataset_name_ima,
-                                            self.dataset_name_dem,
-                                            '',
-                                            self.img_shape_in,
-                                            self.img_shape_out,
-                                            batch_size=batch_size,
-                                            type='test',
-                                            shuffle=False)
+        if self.oldnorm is True:
+            self.data_generator = DataGenerator_oldnorm(self.dataset_name_ima,
+                                                self.dataset_name_dem,
+                                                '',
+                                                self.img_shape_in,
+                                                self.img_shape_out,
+                                                batch_size=batch_size,
+                                                type='test',
+                                                shuffle=False)
+
+        else:
+            self.data_generator = DataGenerator(self.dataset_name_ima,
+                                                self.dataset_name_dem,
+                                                '',
+                                                self.img_shape_in,
+                                                self.img_shape_out,
+                                                batch_size=batch_size,
+                                                type='test',
+                                                shuffle=False)
 
 
 
@@ -205,7 +221,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Test super resolution")
+        description="Test a landslide detection model of some data")
     parser.add_argument("--data_ima", required=True,
                         help="path to image folder ")
     parser.add_argument("--data_dem", required=True,
@@ -214,7 +230,7 @@ if __name__ == '__main__':
                         help="path to model")
     parser.add_argument("--gpu_ids", nargs='+', type=str, default=DEF_CUDA,
                         help="priority for GPU (default : %s)"%DEF_CUDA)
-    parser.add_argument("--batch_size", type=int, default=DEF_COLS,
+    parser.add_argument("--batch_size", type=int, default=DEF_BATCH_SIZE,
                         help="size of batch (larer = speeder but need ram, default : %d)"%DEF_BATCH_SIZE)
     parser.add_argument("--ncols", type=int, default=DEF_COLS,
                         help="numbers of columns (default : %d)"%DEF_COLS)
@@ -228,6 +244,8 @@ if __name__ == '__main__':
                         help="path to output (if None : same folder as data")
     parser.add_argument("--ground_truth", default=None,
                         help="path to ground truth (if exists)")
+    parser.add_argument("--oldnorm", help="(for very first models compatibility, older normalization)",action="store_true")
+
     #parser.add_argument("--compar_path", default=None,
     #                    help="path to save comparaison results (if ground truth exists)")
 
@@ -240,11 +258,12 @@ if __name__ == '__main__':
     compar_path = None
     model_name = args.model
     output_path = args.output
+    oldnorm=args.oldnorm
     cuda_id=args.gpu_ids
     ncols=int(args.ncols)
     nrows=int(args.nrows)
     ch_out = int(args.ch_out)
-    batch = int(args.batch_size)
+    batch = args.batch_size
     ch_in = int(args.ch_in)
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
@@ -255,9 +274,17 @@ if __name__ == '__main__':
     if output_path is not None:
         if not os.path.isdir(output_path):
             os.makedirs(output_path)
+    newname=DEF_TMPO
+    print('loading and convert model')
+  #  change_model(model_name,newname)
 
-    model_test = test(model_name,dataset_name_ima,dataset_name_dem,img_rows=nrows,img_cols=ncols,channels_out=ch_out,channels_in=ch_in,batch_size=batch)
+ #   model_test = test(newname,dataset_name_ima,dataset_name_dem,img_rows=nrows,img_cols=ncols,channels_out=ch_out,channels_in=ch_in,batch_size=batch)
+    model_test = test(model_name,dataset_name_ima,dataset_name_dem,img_rows=nrows,img_cols=ncols,channels_out=ch_out,channels_in=ch_in,batch_size=batch,oldnorm=oldnorm)
     pred=model_test.test_data()
+    #commande='\rm %s'%newname
+    #print('remove tempo files')
+    #os.system.commande(commande)
+
     print('save_data')
     
     if ground_truth is not None:

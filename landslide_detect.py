@@ -21,7 +21,8 @@ import numpy as np
 from keras import backend as K
 
 
-from dataloader_landslide import *
+from dataloader_landslide import DataGenerator,DataGenerator_oldnorm
+
 
 import numpy as np
 import os
@@ -740,7 +741,7 @@ class landslide():
                                             type='val',
                                             shuffle=False)
         else:
-            training_generator = DataGenerator_efficientnet(self.dataset_img,
+            training_generator = DataGenerator_oldnorm(self.dataset_img,
                                                self.dataset_dem,
                                                self.dataset_mask,
                                                self.img_shape_in,
@@ -748,7 +749,7 @@ class landslide():
                                                batch_size=batch_size,
                                                type='train',
                                                shuffle=True)
-            valid_generator = DataGenerator_efficientnet(self.path_val_img,
+            valid_generator = DataGenerator_oldnorm(self.path_val_img,
                                             self.path_val_dem,
                                             self.path_val_mask,
                                             self.img_shape_in,

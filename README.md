@@ -38,13 +38,42 @@ options:
   --ch_in CH_IN         channels in input (default : 3)
   --gpu_ids GPU_IDS     priority for GPU (default : 0)
   --pretrain PRETRAIN   pretrained model (default : )
-  --gf GF               number of filter for the residual part (default : 64)
+  --gf GF               number of filter for the residual part (default : 32)
   --initial_lr INITIAL_LR
                         Initial learning rate (default : 0.001000)
   --decay_steps DECAY_STEPS
                         Decay steps (default : 100000000)
   --decay_rate DECAY_RATE
                         Decay rate (default : 0.900000)
+  --efficientnet        Use efficientnet backcone
+  --vgg                 Use VGG16 backcone
+  --concat_ima          Concatene image only in decoder (instead of images and DEM by default)
+  --concat_dem          Concatene DEM only in decoder (instead of images and DEM by default)
+  --nores               Use classic convolutions instead of residual ones
   --note NOTE           Personal note for the readme file
 ```
 
+
+Command to test : 
+
+```
+ python test.py --h
+
+options:
+  -h, --help            show this help message and exit
+  --data_ima DATA_IMA   path to image folder
+  --data_dem DATA_DEM   path to dem folder
+  --model MODEL         path to model
+  --gpu_ids GPU_IDS [GPU_IDS ...]
+                        priority for GPU (default : 0)
+  --batch_size BATCH_SIZE
+                        size of batch (larer = speeder but need ram, default : 15)
+  --ncols NCOLS         numbers of columns (default : 256)
+  --nrows NROWS         numbers of rows (default : 256)
+  --ch_out CH_OUT       channels in output (default : 1)
+  --ch_in CH_IN         channels in input (channels in output and structure. Default : 3)
+  --output OUTPUT       path to output (if None : same folder as data
+  --ground_truth GROUND_TRUTH
+                        path to ground truth (if exists)
+  --oldnorm             (for very first models compatibility, older normalization)
+```
