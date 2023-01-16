@@ -4,7 +4,7 @@ import scipy
 import keras
 import tensorflow as tf
 import tensorflow.compat.v1 as tf
-tf.disable_v2_behavior()
+#tf.disable_v2_behavior()
 from tensorflow.keras.regularizers import l2
 from tensorflow.keras.layers import Input, Dense, Reshape, Flatten, Dropout, Concatenate
 from tensorflow.keras.layers import BatchNormalization, Activation, ZeroPadding2D
@@ -175,7 +175,7 @@ class landslide():
                  initial_lr=DEF_INITIAL_LR,
                  decay_rate=DEF_DECAY_RATE,
                  decay_steps=DEF_DECAY_STEPS,
-                 gf=DEF_FILTERS,concaten_dem_only=False,concaten_ima_only=False):
+                 gf=DEF_FILTERS,concaten_dem_only=False,concaten_ima_only=False,efficientnet=False):
 
         self.dataset_img= dataset_img
         self.dataset_dem= dataset_dem
@@ -197,6 +197,7 @@ class landslide():
         self.filepath_save = filepath_save
         self.concaten_ima_only = concaten_ima_only
         self.concaten_dem_only = concaten_dem_only
+        self.efficientnet = efficientnet
         # Configure data loader
 
         # Number of filters in the first layer of G and D
@@ -216,7 +217,8 @@ class landslide():
             initial_learning_rate=self.initial_lr,
             decay_steps=self.decay_steps,
             decay_rate=self.decay_rate)
-        optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule,beta_1=0.9,beta_2=0.999)
+#        optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule,beta_1=0.9,beta_2=0.999)
+        optimizer = tf.keras.optimizers.Adam()
         #optimizer = Adam(0.0002, 0.5)
 
         # -------------------------
@@ -225,13 +227,210 @@ class landslide():
         # -------------------------
 
         # Build the generator
-#        self.generator = self.build_generator()
-        self.generator = self.landslide_attention()
+        if self.efficientnet:
+            self.generator = self.landslide_attention_efficientnet(self.img_shape_in,self.img_shape_dem,self.channels_out,self.gf,self.concaten_dem_only,self.concaten_ima_only)
+        else:
+            self.generator = self.landslide_attention()
         print('Generator build')
         self.generator.compile(loss=binary_focal_loss(gamma=2., alpha=.25),
                                metrics=['accuracy'],
                                optimizer=optimizer)
         print('Generator compiled')
+    def landslide_attention_efficientnet(self,img_shape_in,img_shape_dem,channels_out,gf,concaten_dem_only,concaten_ima_only):
+        from tensorflow.keras.applications import EfficientNetB0
+        dropout_rate=0.
+        def conv_block(inputs, filters, pool=True):
+            x = Conv2D(filters, 3, padding="same")(inputs)
+
+            x = BatchNormalization()(x)
+            x = Activation("relu")(x)
+
+            x = Conv2D(filters, 3, padding="same")(x)
+            x = BatchNormalization()(x)
+            x = Activation("relu")(x)
+            if pool:
+                p = MaxPool2D((2, 2))(x)
+                return x, p
+            else:
+                return x
+    
+
+        def convolution_block(x, filters, size, strides=(1,1), padding='same', activation=True):
+            x = Conv2D(filters, size, strides=strides, padding=padding)(x)
+            x = BatchNormalization()(x)
+            if activation == True:
+                x = LeakyReLU(alpha=0.1)(x)
+            return x
+
+        def residual_block(blockInput, num_filters=16,pool=False):
+            x = LeakyReLU(alpha=0.1)(blockInput)
+            x = BatchNormalization()(x)
+            blockInput = BatchNormalization()(blockInput)
+            x = convolution_block(x, num_filters, (3,3) )
+            x = convolution_block(x, num_filters, (3,3), activation=False)
+            x = Add()([x, blockInput])
+            if pool:
+                p = MaxPool2D((2, 2))(x)
+                return x, p
+            else:
+                return x
+
+
+
+        def attention_block_2d(x, g, inter_channel):
+            # theta_x(?,g_height,g_width,inter_channel)
+            theta_x = Conv2D(inter_channel, [1, 1], strides=[1, 1])(x)
+            # phi_g(?,g_height,g_width,inter_channel)
+            phi_g = Conv2D(inter_channel, [1, 1], strides=[1, 1])(g)
+            # f(?,g_height,g_width,inter_channel)
+            f = Activation('relu')(add([theta_x, phi_g]))
+            # psi_f(?,g_height,g_width,1)
+            psi_f = Conv2D(1, [1, 1], strides=[1, 1])(f)
+            rate = Activation('sigmoid')(psi_f)
+            att_x = multiply([x, rate])
+            return att_x
+
+        def attention_up_and_concate(down_layer, layer):
+            in_channel = down_layer.get_shape().as_list()[3]
+            up = UpSampling2D(size=(2, 2))(down_layer)
+            layer = attention_block_2d(x=layer, g=up, inter_channel=in_channel // 4)
+            my_concat = Lambda(lambda x: K.concatenate([x[0], x[1]], axis=3))
+            concate = my_concat([up, layer])
+            return concate
+        def num_layer(model,name_layer):
+            for i in range(len(model.layers)):
+                if name_layer not in model.layers[i].name:
+                    continue
+                n=i
+                print('number layer ',i,model.layers[i].name)
+            return n
+
+        #""" Encoder image """
+        #inputs = tf.keras.layers.Input(shape=img_shape_in)
+        backbone = EfficientNetB0(weights='imagenet',include_top=False,input_shape=img_shape_in)
+        #input = backbone(inputs)
+        input = backbone.input
+        nconv0= num_layer(backbone,'normalization')
+        nconv1= num_layer(backbone,'block1a_activation')
+        nconv2= num_layer(backbone,'block2a_activation')
+        nconv3= num_layer(backbone,'block3a_activation')
+        nconv4= num_layer(backbone,'block4a_activation')
+    
+        nconv1= num_layer(backbone,'block2a_expand_activation')
+        nconv2= num_layer(backbone,'block3a_expand_activation')
+        nconv3= num_layer(backbone,'block4a_expand_activation')
+        nconv4= num_layer(backbone,'block6a_expand_activation')
+    
+        x1i = backbone.layers[nconv0].output # 86
+        x2i = backbone.layers[nconv1].output # 86
+        x3i = backbone.layers[nconv2].output # 144
+        x4i = backbone.layers[nconv3].output # 240
+        x5i = backbone.layers[nconv4].output # 480
+
+    
+        """ Encoder dem """
+        input_dem = Input(img_shape_dem,name="input_2")
+        xc = Conv2D(gf*1,(3, 3), activation=None, padding="same")(input_dem)
+        x1d, p1d = residual_block(xc, gf,pool=True)
+        p1d = Conv2D(gf*2,(3, 3), activation=None, padding="same")(p1d)
+        x2d, p2d = residual_block(p1d, gf*2,pool=True )
+        p2d = Conv2D(gf*4,(3, 3), activation=None, padding="same")(p2d)
+        x3d, p3d = residual_block(p2d, gf * 4,pool=True)
+        p3d = Conv2D(gf*8,(3, 3), activation=None, padding="same")(p3d)
+        x4d, p4d = residual_block(p3d, gf * 8,pool=True)
+    
+        """ Bridge"""
+        bridge = Concatenate(axis=-1,name="fusion_encoders")([x5i, p4d])
+        bridge = Conv2D(gf*8,(3, 3), activation=None, padding="same")(bridge)
+        bridge = residual_block(bridge, gf * 8)
+
+        if concaten_dem_only is True:
+            x = attention_up_and_concate(bridge,x4d)
+            x = Conv2D(gf * 8, (3, 3), activation=None, padding="same")(x)
+            x = residual_block(x,gf * 8)
+            x = residual_block(x,gf * 8)
+            x = LeakyReLU(alpha=0.1)(x)
+
+            x = attention_up_and_concate(x,x3d)
+            x = Conv2D(gf * 4, (3, 3), activation=None, padding="same")(x)
+            x = residual_block(x,gf * 4)
+            x = residual_block(x,gf * 4)
+            x = LeakyReLU(alpha=0.1)(x)
+
+            x = attention_up_and_concate(x,x2d)
+            x = Conv2D(gf * 2, (3, 3), activation=None, padding="same")(x)
+            x = residual_block(x,gf * 2)
+            x = residual_block(x,gf * 2)
+            x = LeakyReLU(alpha=0.1)(x)
+
+            x = attention_up_and_concate(x,x1d)
+            x = Conv2D(gf , (3, 3), activation=None, padding="same")(x)
+            x = residual_block(x,gf )
+            x = residual_block(x,gf )
+            x = LeakyReLU(alpha=0.1)(x)
+        
+        
+        elif concaten_ima_only is True:
+            """ Concaten Image only """
+            x = attention_up_and_concate(bridge,x4i)
+            x = Conv2D(gf * 8, (3, 3), activation=None, padding="same")(x)
+            x = residual_block(x,gf * 8)
+            x = residual_block(x,gf * 8)
+            x = LeakyReLU(alpha=0.1)(x)
+
+            x = attention_up_and_concate(x,x3i)
+            x = Conv2D(gf * 4, (3, 3), activation=None, padding="same")(x)
+            x = residual_block(x,gf * 4)
+            x = residual_block(x,gf * 4)
+            x = LeakyReLU(alpha=0.1)(x)
+
+            x = attention_up_and_concate(x,x2i)
+            x = Conv2D(gf * 2, (3, 3), activation=None, padding="same")(x)
+            x = residual_block(x,gf * 2)
+            x = residual_block(x,gf * 2)
+            x = LeakyReLU(alpha=0.1)(x)
+
+            x = attention_up_and_concate(x,x1i)
+            x = Conv2D(gf , (3, 3), activation=None, padding="same")(x)
+            x = residual_block(x,gf )
+            x = residual_block(x,gf )
+            x = LeakyReLU(alpha=0.1)(x)
+        else:
+            """ Concaten Image and DEM """
+            x = attention_up_and_concate(bridge,Concatenate(axis=-1)([x4i, x4d]))
+            x = Conv2D(gf * 8, (3, 3), activation=None, padding="same")(x)
+            x = residual_block(x,gf * 8)
+            x = residual_block(x,gf * 8)
+            x = LeakyReLU(alpha=0.1)(x)
+
+            x = attention_up_and_concate(x,Concatenate(axis=-1)([x3i, x3d]))
+            x = Conv2D(gf * 4, (3, 3), activation=None, padding="same")(x)
+            x = residual_block(x,gf * 4)
+            x = residual_block(x,gf * 4)
+            x = LeakyReLU(alpha=0.1)(x)
+
+            x = attention_up_and_concate(x,Concatenate(axis=-1)([x2i, x2d]))
+            x = Conv2D(gf * 2, (3, 3), activation=None, padding="same")(x)
+            x = residual_block(x,gf * 2)
+            x = residual_block(x,gf * 2)
+            x = LeakyReLU(alpha=0.1)(x)
+
+            x = attention_up_and_concate(x,Concatenate(axis=-1)([x1i, x1d]))
+            x = Conv2D(gf , (3, 3), activation=None, padding="same")(x)
+            x = residual_block(x,gf )
+            x = residual_block(x,gf )
+            x = LeakyReLU(alpha=0.1)(x)
+        
+        x = Conv2D(gf * 1, (3, 3), activation=None, padding="same")(x)
+        x = residual_block(x,gf * 1)
+        x = residual_block(x,gf * 1)
+        x = LeakyReLU(alpha=0.1)(x)
+    
+        x = Dropout(dropout_rate/2)(x)
+        output_layer = Conv2D(channels_out, (1,1), padding="same", activation="sigmoid")(x)
+        return Model([input,input_dem], output_layer)
+
+    
     def landslide_attention(self):
         def conv_block(inputs, filters, pool=True):
             x = Conv2D(filters, 3, padding="same")(inputs)
@@ -269,14 +468,14 @@ class landslide():
             concate = my_concat([up, layer])
             return concate
 
-        inputs_ima = Input(self.img_shape_in,name="input_image")
+        inputs_ima = Input(self.img_shape_in,name="input_1")
         """ Encoder image """
         x1i, p1i = conv_block(inputs_ima, self.gf)
         x2i, p2i = conv_block(p1i, self.gf * 2)
         x3i, p3i = conv_block(p2i, self.gf * 3)
         x4i, p4i = conv_block(p3i, self.gf * 4)
         
-        inputs_dem = Input(self.img_shape_dem,name="input_dem")
+        inputs_dem = Input(self.img_shape_dem,name="input_2")
         """ Encoder dem """
         x1d, p1d = conv_block(inputs_dem, self.gf/2)
         x2d, p2d = conv_block(p1d, self.gf )
@@ -362,9 +561,7 @@ class landslide():
         print('Start training (batch size %d)' % batch_size)
         print('------------------------------------')
 
-
         hist = self.generator.fit(training_generator,validation_data=valid_generator,validation_steps=2,epochs=epochs,callbacks=callbacks)
-        return hist
 
 
 if __name__ == '__main__':
@@ -410,6 +607,7 @@ if __name__ == '__main__':
                         help="Decay steps (default : %d)"%DEF_DECAY_STEPS)
     parser.add_argument("--decay_rate", type=float, default=DEF_DECAY_RATE,
                         help="Decay rate (default : %f)"%DEF_DECAY_RATE)
+    parser.add_argument("--efficientnet", help="Use efficientnet backcone",action="store_true")
     parser.add_argument("--concat_ima", help="Concatene image only in decoder (instead of images and DEM by default)",action="store_true")
     parser.add_argument("--concat_dem", help="Concatene DEM only in decoder (instead of images and DEM by default)",action="store_true")
     parser.add_argument("--note", type=str, default='',
@@ -437,6 +635,7 @@ if __name__ == '__main__':
     initial_lr=args.initial_lr
     concaten_ima_only = args.concat_ima
     concaten_dem_only = args.concat_dem
+    efficientnet = args.efficientnet
 
     pretrain=args.pretrain
     config = tf.ConfigProto()
@@ -484,6 +683,8 @@ if __name__ == '__main__':
         fid.write('Use DEM only in decoder\n')
     else:
         fid.write('Use Images and DEM in decoder\n')
+    if efficientnet is True:
+        fid.write('Efficientnet backbone encoder\n')
 
 
     if pretrain != '':
@@ -514,7 +715,7 @@ if __name__ == '__main__':
                  initial_lr=initial_lr,
                  decay_rate=decay_rate,
                  decay_steps=decay_steps,
-                 gf=gf,concaten_ima_only=concaten_ima_only,concaten_dem_only=concaten_dem_only)
+                 gf=gf,concaten_ima_only=concaten_ima_only,concaten_dem_only=concaten_dem_only,efficientnet=efficientnet)
     if os.path.exists(pretrain):
         print('---------------------------------')
         print('load pretrain model %s'%pretrain)
@@ -524,7 +725,8 @@ if __name__ == '__main__':
             initial_learning_rate=initial_lr,
             decay_steps=decay_steps,
             decay_rate=decay_rate)
-        optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule,beta_1=0.9,beta_2=0.999)
+#        optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule,beta_1=0.9,beta_2=0.999)
+        optimizer = tf.keras.optimizers.Adam()
         network.generator.compile(loss=binary_focal_loss(gamma=2., alpha=.25),
                                metrics=['accuracy'],
                                loss_weights=[1],

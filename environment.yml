@@ -1,4 +1,4 @@
-name: cnn_costarica
+name: cnn_tf2.9
 channels:
   - conda-forge
 dependencies:

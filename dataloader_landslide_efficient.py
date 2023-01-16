@@ -103,8 +103,8 @@ class DataGenerator(tensorflow.keras.utils.Sequence):
         y = np.array(y_t)/DEF_NORM
         ima = np.array(ima_t)/DEF_NORM
         dem = np.array(dem_t)/DEF_NORM
-        return {'input_1': ima, 'input_2': dem},y
-#        return {'input_image': ima, 'input_dem': dem}
+#        return {'input_1': ima, 'input_2': dem},y
+        return {'input_image': ima, 'input_dem': dem}
 
     def __data_generation_test(self,path_in_temp,path_in_temp_dem):
         'Generates data containing batch_size samples' # X : (n_samples, *dim, n_channels)
@@ -118,8 +118,8 @@ class DataGenerator(tensorflow.keras.utils.Sequence):
             dem_t.append(dem)
         ima = np.array(ima_t)/DEF_NORM
         dem = np.array(dem_t)/DEF_NORM
-#        return {'input_image': ima, 'input_dem': dem}
-        return {'input_1': ima, 'input_2': dem}
+        return {'input_image': ima, 'input_dem': dem}
+#        return {'input_1': ima, 'input_2': dem}
 
 
     def imread(self, path):
