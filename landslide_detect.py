@@ -176,7 +176,7 @@ class landslide():
                  initial_lr=DEF_INITIAL_LR,
                  decay_rate=DEF_DECAY_RATE,
                  decay_steps=DEF_DECAY_STEPS,
-                 gf=DEF_FILTERS,concaten_dem_only=False,concaten_ima_only=False,efficientnet=False,nores=False,vgg=False,pretrain='pretrain'):
+                 gf=DEF_FILTERS,concaten_dem_only=False,concaten_ima_only=False,efficientnet=False,nores=False,vgg=False,pretrain='pretrain',trainvgg=False):
 
         self.dataset_img= dataset_img
         self.dataset_dem= dataset_dem
@@ -200,6 +200,7 @@ class landslide():
         self.concaten_dem_only = concaten_dem_only
         self.efficientnet = efficientnet
         self.vgg=vgg
+        self.trainvgg=trainvgg
         self.pretrain=pretrain
         # Use residual convolution blocks
         if nores is True:
@@ -248,6 +249,9 @@ class landslide():
         self.generator.compile(loss=binary_focal_loss(gamma=2., alpha=.25),
                                metrics=['accuracy'],
                                optimizer=optimizer)
+#        self.generator.compile(loss=tf.keras.losses.BinaryCrossentropy(),
+#                               metrics=['accuracy'],
+#                               optimizer=optimizer)
         print('Generator compiled')
         
     
@@ -325,8 +329,9 @@ class landslide():
         inputs_ima = Input(self.img_shape_in,name="input_image")
         """ Pre-trained VGG16 Model """
         vgg16 = VGG16(include_top=False, weights="imagenet", input_tensor=inputs_ima)
-        for layer in vgg16.layers:
-            layer.trainable=False
+        if self.trainvgg is False:
+            for layer in vgg16.layers:
+                layer.trainable=False
         
         """ Encoder """
         x1i = vgg16.get_layer("block1_conv2").output         ## (512 x 512)
@@ -714,6 +719,8 @@ class landslide():
         # -- Callbacks
         # Parameters
         start_time = datetime.datetime.now()
+        class_weight={0: 0.1, 1: 1}
+
         callbacks = [
             tf.keras.callbacks.EarlyStopping(patience=435,monitor = 'val_loss'),
             tf.keras.callbacks.ModelCheckpoint(filepath='%s/models/model-{epoch:05d}-{loss:.5f}-{val_loss:.5f}.h5'%self.filepath_save,
@@ -721,7 +728,7 @@ class landslide():
                                                save_weights_only=False,
                                                monitor = 'accuracy',
                                                verbose=2,
-                                               save_freq='epoch'),
+                                               save_freq='epoch',class_weight=class_weight),
         ]       # update_freq log a batch-level summary every N
         if self.efficientnet is False:
             training_generator = DataGenerator(self.dataset_img,
@@ -762,7 +769,6 @@ class landslide():
         print('------------------------------------')
         print('Start training (batch size %d)' % batch_size)
         print('------------------------------------')
-
         hist = self.generator.fit(training_generator,validation_data=valid_generator,validation_steps=2,epochs=epochs,callbacks=callbacks)
 
 
@@ -811,6 +817,7 @@ if __name__ == '__main__':
                         help="Decay rate (default : %f)"%DEF_DECAY_RATE)
     parser.add_argument("--efficientnet", help="Use efficientnet backcone",action="store_true")
     parser.add_argument("--vgg", help="Use VGG16 backcone",action="store_true")
+    parser.add_argument("--trainvgg", help="Train also VGG16 parameters (if vgg)",action="store_true")
     parser.add_argument("--concat_ima", help="Concatene image only in decoder (instead of images and DEM by default)",action="store_true")
     parser.add_argument("--concat_dem", help="Concatene DEM only in decoder (instead of images and DEM by default)",action="store_true")
     parser.add_argument("--nores", help="Use classic convolutions instead of residual ones",action="store_true")
@@ -843,6 +850,7 @@ if __name__ == '__main__':
     nores = args.nores
     pretrain = args.pretrain
     vgg = args.vgg
+    trainvgg = args.trainvgg
 
     pretrain=args.pretrain
     config = tf.ConfigProto()
@@ -891,9 +899,15 @@ if __name__ == '__main__':
     else:
         fid.write('Use Images and DEM in decoder\n')
     if efficientnet is True:
-        fid.write('Use VGG backbone encoder\n')
+        fid.write('Use Efficientnet backbone encoder\n')
     if vgg is True:
-        fid.write('Efficientnet backbone encoder\n')
+        fid.write('Use VGG backbone encoder\n')
+        if trainvgg is True:
+            fid.write('Retrain VGG encoder\n')
+        else:
+            fid.write('Freeze VGG encoder\n')
+
+
     elif nores is True:
         fid.write('Use classic 2D convolutions\n')
     else:
@@ -928,7 +942,7 @@ if __name__ == '__main__':
                  initial_lr=initial_lr,
                  decay_rate=decay_rate,
                  decay_steps=decay_steps,
-                 gf=gf,concaten_ima_only=concaten_ima_only,concaten_dem_only=concaten_dem_only,efficientnet=efficientnet,nores=nores,vgg=vgg,pretrain=pretrain)
+                 gf=gf,concaten_ima_only=concaten_ima_only,concaten_dem_only=concaten_dem_only,efficientnet=efficientnet,nores=nores,vgg=vgg,pretrain=pretrain,trainvgg=trainvgg)
     if os.path.exists(pretrain):
         print('---------------------------------')
         print('load pretrain model %s'%pretrain)
