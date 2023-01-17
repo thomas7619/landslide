@@ -347,40 +347,34 @@ class landslide():
         x2d, p2d = convolution(p1d, self.gf ,pool=True,residual=self.residual)
         x3d, p3d = convolution(p2d, self.gf * 2,pool=True,residual=self.residual)
         x4d, p4d = convolution(p3d, self.gf * 3,pool=True,residual=self.residual)
+        if self.concaten_dem_only is True:
+            skip4=x4d
+            skip3=x3d
+            skip2=x2d
+            skip1=x1d
+        elif self.concaten_ima_only is True:
+            skip4=x4i
+            skip3=x3i
+            skip2=x2i
+            skip1=x1i
+        else:
+            skip4 = Concatenate(axis=-1)([x4i, x4d])
+            skip3 = Concatenate(axis=-1)([x3i, x3d])
+            skip2 = Concatenate(axis=-1)([x2i, x2d])
+            skip1 = Concatenate(axis=-1)([x1i, x1d])
 
         bridge = Concatenate(axis=-1,name="fusion_encoders")([b1, p4d])
         b1 = convolution(bridge, gf * 8,pool=False,residual=self.residual)
         """ Decoder """
-        if self.concaten_dem_only is True:
-            """ Concaten DEM only """
-            x = attention_up_and_concate(b1,x4d)
-            x = convolution(x, 4 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x, x3d)
-            x = convolution(x, 3 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x,x2d)
-            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x,x1d)
-            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
-        elif self.concaten_ima_only is True:
-            """ Concaten Image only """
-            x = attention_up_and_concate(b1,x4i)
-            x = convolution(x, 4 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x, x3i)
-            x = convolution(x, 3 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x,x2i)
-            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x,x1i)
-            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
-        else:
-            """ Concaten Image and DEM """
-            x = attention_up_and_concate(b1,Concatenate(axis=-1)([x4i, x4d]))
-            x = convolution(x, 4 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x, Concatenate(axis=-1)([x3i, x3d]))
-            x = convolution(x, 3 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x,Concatenate(axis=-1)([x2i, x2d]))
-            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x,Concatenate(axis=-1)([x1i, x1d]))
-            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+        """ Concaten DEM only """
+        x = attention_up_and_concate(b1,skip4)
+        x = convolution(x, 4 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x, skip3)
+        x = convolution(x, 3 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x,skip2)
+        x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x,skip1)
+        x = convolution(x, 2 * gf, pool=False,residual=self.residual)
 
 
 
@@ -502,83 +496,47 @@ class landslide():
         bridge = Concatenate(axis=-1,name="fusion_encoders")([x5i, p4d])
         bridge = Conv2D(gf*8,(3, 3), activation=None, padding="same")(bridge)
         bridge = residual_block(bridge, gf * 8)
-
-        if concaten_dem_only is True:
-            x = attention_up_and_concate(bridge,x4d)
-            x = Conv2D(gf * 8, (3, 3), activation=None, padding="same")(x)
-            x = residual_block(x,gf * 8)
-            x = residual_block(x,gf * 8)
-            x = LeakyReLU(alpha=0.1)(x)
-
-            x = attention_up_and_concate(x,x3d)
-            x = Conv2D(gf * 4, (3, 3), activation=None, padding="same")(x)
-            x = residual_block(x,gf * 4)
-            x = residual_block(x,gf * 4)
-            x = LeakyReLU(alpha=0.1)(x)
-
-            x = attention_up_and_concate(x,x2d)
-            x = Conv2D(gf * 2, (3, 3), activation=None, padding="same")(x)
-            x = residual_block(x,gf * 2)
-            x = residual_block(x,gf * 2)
-            x = LeakyReLU(alpha=0.1)(x)
-
-            x = attention_up_and_concate(x,x1d)
-            x = Conv2D(gf , (3, 3), activation=None, padding="same")(x)
-            x = residual_block(x,gf )
-            x = residual_block(x,gf )
-            x = LeakyReLU(alpha=0.1)(x)
-        
-        
-        elif concaten_ima_only is True:
-            """ Concaten Image only """
-            x = attention_up_and_concate(bridge,x4i)
-            x = Conv2D(gf * 8, (3, 3), activation=None, padding="same")(x)
-            x = residual_block(x,gf * 8)
-            x = residual_block(x,gf * 8)
-            x = LeakyReLU(alpha=0.1)(x)
-
-            x = attention_up_and_concate(x,x3i)
-            x = Conv2D(gf * 4, (3, 3), activation=None, padding="same")(x)
-            x = residual_block(x,gf * 4)
-            x = residual_block(x,gf * 4)
-            x = LeakyReLU(alpha=0.1)(x)
-
-            x = attention_up_and_concate(x,x2i)
-            x = Conv2D(gf * 2, (3, 3), activation=None, padding="same")(x)
-            x = residual_block(x,gf * 2)
-            x = residual_block(x,gf * 2)
-            x = LeakyReLU(alpha=0.1)(x)
-
-            x = attention_up_and_concate(x,x1i)
-            x = Conv2D(gf , (3, 3), activation=None, padding="same")(x)
-            x = residual_block(x,gf )
-            x = residual_block(x,gf )
-            x = LeakyReLU(alpha=0.1)(x)
+        if self.concaten_dem_only is True:
+            skip4=x4d
+            skip3=x3d
+            skip2=x2d
+            skip1=x1d
+        elif self.concaten_ima_only is True:
+            skip4=x4i
+            skip3=x3i
+            skip2=x2i
+            skip1=x1i
         else:
-            """ Concaten Image and DEM """
-            x = attention_up_and_concate(bridge,Concatenate(axis=-1)([x4i, x4d]))
-            x = Conv2D(gf * 8, (3, 3), activation=None, padding="same")(x)
-            x = residual_block(x,gf * 8)
-            x = residual_block(x,gf * 8)
-            x = LeakyReLU(alpha=0.1)(x)
+            skip4 = Concatenate(axis=-1)([x4i, x4d])
+            skip3 = Concatenate(axis=-1)([x3i, x3d])
+            skip2 = Concatenate(axis=-1)([x2i, x2d])
+            skip1 = Concatenate(axis=-1)([x1i, x1d])
 
-            x = attention_up_and_concate(x,Concatenate(axis=-1)([x3i, x3d]))
-            x = Conv2D(gf * 4, (3, 3), activation=None, padding="same")(x)
-            x = residual_block(x,gf * 4)
-            x = residual_block(x,gf * 4)
-            x = LeakyReLU(alpha=0.1)(x)
 
-            x = attention_up_and_concate(x,Concatenate(axis=-1)([x2i, x2d]))
-            x = Conv2D(gf * 2, (3, 3), activation=None, padding="same")(x)
-            x = residual_block(x,gf * 2)
-            x = residual_block(x,gf * 2)
-            x = LeakyReLU(alpha=0.1)(x)
+        x = attention_up_and_concate(bridge,skip4)
+        x = Conv2D(gf * 8, (3, 3), activation=None, padding="same")(x)
+        x = residual_block(x,gf * 8)
+        x = residual_block(x,gf * 8)
+        x = LeakyReLU(alpha=0.1)(x)
 
-            x = attention_up_and_concate(x,Concatenate(axis=-1)([x1i, x1d]))
-            x = Conv2D(gf , (3, 3), activation=None, padding="same")(x)
-            x = residual_block(x,gf )
-            x = residual_block(x,gf )
-            x = LeakyReLU(alpha=0.1)(x)
+        x = attention_up_and_concate(x,skip3)
+        x = Conv2D(gf * 4, (3, 3), activation=None, padding="same")(x)
+        x = residual_block(x,gf * 4)
+        x = residual_block(x,gf * 4)
+        x = LeakyReLU(alpha=0.1)(x)
+
+        x = attention_up_and_concate(x,skip2)
+        x = Conv2D(gf * 2, (3, 3), activation=None, padding="same")(x)
+        x = residual_block(x,gf * 2)
+        x = residual_block(x,gf * 2)
+        x = LeakyReLU(alpha=0.1)(x)
+
+        x = attention_up_and_concate(x,skip1)
+        x = Conv2D(gf , (3, 3), activation=None, padding="same")(x)
+        x = residual_block(x,gf )
+        x = residual_block(x,gf )
+        x = LeakyReLU(alpha=0.1)(x)
+        
         
         x = Conv2D(gf * 1, (3, 3), activation=None, padding="same")(x)
         x = residual_block(x,gf * 1)
@@ -674,37 +632,31 @@ class landslide():
     #    bridge = p4d
         b1 = convolution(bridge, gf * 8,pool=False,residual=self.residual)
 
-        """ Decoder """
         if self.concaten_dem_only is True:
-            """ Concaten DEM only """
-            x = attention_up_and_concate(b1,x4d)
-            x = convolution(x, 4 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x, x3d)
-            x = convolution(x, 3 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x,x2d)
-            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x,x1d)
-            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+            skip4=x4d
+            skip3=x3d
+            skip2=x2d
+            skip1=x1d
         elif self.concaten_ima_only is True:
-            """ Concaten Image only """
-            x = attention_up_and_concate(b1,x4i)
-            x = convolution(x, 4 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x, x3i)
-            x = convolution(x, 3 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x,x2i)
-            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x,x1i)
-            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+            skip4=x4i
+            skip3=x3i
+            skip2=x2i
+            skip1=x1i
         else:
-            """ Concaten Image and DEM """
-            x = attention_up_and_concate(b1,Concatenate(axis=-1)([x4i, x4d]))
-            x = convolution(x, 4 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x, Concatenate(axis=-1)([x3i, x3d]))
-            x = convolution(x, 3 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x,Concatenate(axis=-1)([x2i, x2d]))
-            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
-            x = attention_up_and_concate(x,Concatenate(axis=-1)([x1i, x1d]))
-            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+            skip4 = Concatenate(axis=-1)([x4i, x4d])
+            skip3 = Concatenate(axis=-1)([x3i, x3d])
+            skip2 = Concatenate(axis=-1)([x2i, x2d])
+            skip1 = Concatenate(axis=-1)([x1i, x1d])
+
+        """ Decoder """
+        x = attention_up_and_concate(b1,skip4)
+        x = convolution(x, 4 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x, skip3)
+        x = convolution(x, 3 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x,skip2)
+        x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x,skip1)
+        x = convolution(x, 2 * gf, pool=False,residual=self.residual)
 
 
 
