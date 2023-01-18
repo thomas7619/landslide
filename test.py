@@ -50,19 +50,40 @@ list_out = [0,1,2,3,4,5,255]
 #       0.0, 1.0, 0.0)}
 def vide_loss(x1,x2):
     return x1+x2
+
+def recall_m(y_true, y_pred):
+    true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+    possible_positives = K.sum(K.round(K.clip(y_true, 0, 1)))
+    recall = true_positives / (possible_positives +
+    K.epsilon())
+    return recall
+
+def precision_m(y_true, y_pred):
+    true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+    predicted_positives = K.sum(K.round(K.clip(y_pred, 0, 1)))
+    precision = true_positives / (predicted_positives + K.epsilon())
+    return precision
+
+def f1_m(y_true, y_pred):
+    precision = precision_m(y_true, y_pred)
+    recall = recall_m(y_true, y_pred)
+    return 2*((precision*recall)/(precision+recall+K.epsilon()))
+
 DEF_CUSTOM_OBJECTS={'binary_focal_loss':vide_loss,
                     'binary_focal_loss_fixed':vide_loss,
                     'categorical_focal_loss':vide_loss,
                     'categorical_focal_loss_fixed':vide_loss,
-                    'myloss':vide_loss,'vide_loss':vide_loss}
-
+                    'myloss':vide_loss,'vide_loss':vide_loss,
+                    'f1_m':f1_m,
+                    'precision_m':precision_m,
+                    'recall_m':recall_m}
 
 def change_model(model_name,newname):
     model=tf.keras.models.load_model(model_name,custom_objects=DEF_CUSTOM_OBJECTS)
     tf.keras.models.save_model(model,newname)
 
 class test():
-    def __init__(self,model_name,dataset_name_ima,dataset_name_dem,img_rows=DEF_ROWS,img_cols=DEF_COLS,channels_out=DEF_CH_OUT,channels_in=DEF_CH_IN,batch_size=DEF_BATCH_SIZE,oldnorm=False):
+    def __init__(self,model_name,dataset_name_ima,dataset_name_dem,dataset_name_mask='',img_rows=DEF_ROWS,img_cols=DEF_COLS,channels_out=DEF_CH_OUT,channels_in=DEF_CH_IN,batch_size=DEF_BATCH_SIZE,oldnorm=False,gt=False):
         # Input shape
         self.model_name=model_name
         self.img_rows = img_rows
@@ -74,29 +95,35 @@ class test():
         # Configure data loader
         self.dataset_name_ima = dataset_name_ima
         self.dataset_name_dem = dataset_name_dem
+        self.dataset_name_mask = dataset_name_mask
         self.batch_size=batch_size
         self.oldnorm=oldnorm
+        self.gt=gt
         print('charging model')
         self.model=tf.keras.models.load_model(model_name, custom_objects=DEF_CUSTOM_OBJECTS)
         print('Done')
+        if self.gt is True:
+            type='eval'
+        else:
+            type = 'test'
         if self.oldnorm is True:
             self.data_generator = DataGenerator_oldnorm(self.dataset_name_ima,
                                                 self.dataset_name_dem,
-                                                '',
+                                                self.dataset_name_mask,
                                                 self.img_shape_in,
                                                 self.img_shape_out,
                                                 batch_size=batch_size,
-                                                type='test',
+                                                type=type,
                                                 shuffle=False)
 
         else:
             self.data_generator = DataGenerator(self.dataset_name_ima,
                                                 self.dataset_name_dem,
-                                                '',
+                                                self.dataset_name_mask,
                                                 self.img_shape_in,
                                                 self.img_shape_out,
                                                 batch_size=batch_size,
-                                                type='test',
+                                                type=type,
                                                 shuffle=False)
 
 
@@ -107,6 +134,17 @@ class test():
         print('------------------------------------')
         pred = self.model.predict(self.data_generator)
         return pred
+    def evaluate_data(self):
+        print('------------------------------------')
+        print('Start predict (batch size %d)' % self.batch_size)
+        print('------------------------------------')
+
+        #eva = self.model.evaluate(self.data_generator,callbacks=callbacks)
+        names=[]
+        eva = self.model.evaluate(self.data_generator)
+        for i in range(len(self.model.metrics)):
+            names.append(self.model.metrics[i].name)
+        return eva,names
 
     def save_data(self,pred,output_folder=None):
         if output_folder is None:
@@ -271,6 +309,12 @@ if __name__ == '__main__':
 
     physical_devices = tf.config.experimental.list_physical_devices('GPU')
     session = tf.Session(config=config)
+    if ground_truth is not None:
+        gt=True
+        dataset_name_mask=ground_truth
+    else:
+        gt=False
+        dataset_name_mask = ''
     if output_path is not None:
         if not os.path.isdir(output_path):
             os.makedirs(output_path)
@@ -279,14 +323,25 @@ if __name__ == '__main__':
   #  change_model(model_name,newname)
 
  #   model_test = test(newname,dataset_name_ima,dataset_name_dem,img_rows=nrows,img_cols=ncols,channels_out=ch_out,channels_in=ch_in,batch_size=batch)
-    model_test = test(model_name,dataset_name_ima,dataset_name_dem,img_rows=nrows,img_cols=ncols,channels_out=ch_out,channels_in=ch_in,batch_size=batch,oldnorm=oldnorm)
+    model_test = test(model_name,dataset_name_ima,dataset_name_dem,dataset_name_mask=dataset_name_mask,img_rows=nrows,img_cols=ncols,channels_out=ch_out,channels_in=ch_in,batch_size=batch,oldnorm=oldnorm,gt=gt)
     pred=model_test.test_data()
     #commande='\rm %s'%newname
     #print('remove tempo files')
     #os.system.commande(commande)
 
+    print('Evaluation : ')
+    if ground_truth is not None:
+        eval,names_eva=model_test.evaluate_data()
+        name_readme = '%s/metrics.txt'%output_path
+        fid = open(name_readme, "w")
+        fid.write('------------ Evaluation metrics --------\n')
+        for i in range(len(names_eva)):
+            print(names_eva[i],' = ',eval[i])
+            fid.write('%s = %f\n' %(names_eva[i],eval[i]))
+        fid.close()
+
     print('save_data')
-    
+
     if ground_truth is not None:
         if compar_path is not None:
             if not os.path.isdir(compar_path):

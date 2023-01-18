@@ -240,22 +240,38 @@ class landslide():
         if self.pretrain != '':
             self.generator =load_model(pretrain,custom_objects=DEF_CUSTOM_OBJECTS)
         elif self.efficientnet:
-            self.generator = self.landslide_attention_efficientnet(self.img_shape_in,self.img_shape_dem,self.channels_out,self.gf,self.concaten_dem_only,self.concaten_ima_only)
+            self.generator = self.landslide_attention_efficientnet(self.img_shape_in,
+                                                                   self.img_shape_dem,
+                                                                   self.channels_out,
+                                                                   self.gf,
+                                                                   self.concaten_dem_only,
+                                                                   self.concaten_ima_only)
         elif self.vgg:
-            self.generator = self.landslide_attention_vgg(self.img_shape_in,self.img_shape_dem,self.channels_out,self.gf,self.concaten_dem_only,self.concaten_ima_only)
+            self.generator = self.landslide_attention_vgg(self.img_shape_in,
+                                                          self.img_shape_dem,
+                                                          self.channels_out,
+                                                          self.gf,
+                                                          self.concaten_dem_only,
+                                                          self.concaten_ima_only)
         else:
             self.generator = self.landslide_attention()
         print('Generator build')
-        self.generator.compile(loss=binary_focal_loss(gamma=2., alpha=.25),
-                               metrics=['accuracy'],
-                               optimizer=optimizer)
+        #self.generator.compile(loss=binary_focal_loss(gamma=2., alpha=.25),
+        #                       metrics=['accuracy',f1_m, tf.keras.metrics.BinaryIoU()],
+        #                       optimizer=optimizer)
+
+
+        self.generator.compile(loss=tf.keras.losses.BinaryFocalCrossentropy(),
+                       metrics=['accuracy', f1_m, tf.keras.metrics.BinaryIoU()],
+                       optimizer=optimizer)
 #        self.generator.compile(loss=tf.keras.losses.BinaryCrossentropy(),
 #                               metrics=['accuracy'],
 #                               optimizer=optimizer)
         print('Generator compiled')
         
     
-    def landslide_attention_vgg(self,img_shape_in,img_shape_dem,channels_out,gf,concaten_dem_only,concaten_ima_only):
+    def landslide_attention_vgg(self,img_shape_in,img_shape_dem,channels_out,
+                                gf,concaten_dem_only,concaten_ima_only):
         from tensorflow.keras.applications import VGG16
 
         def conv_block(inputs, filters, pool=True):
@@ -358,10 +374,14 @@ class landslide():
             skip2=x2i
             skip1=x1i
         else:
-            skip4 = Concatenate(axis=-1)([x4i, x4d])
-            skip3 = Concatenate(axis=-1)([x3i, x3d])
-            skip2 = Concatenate(axis=-1)([x2i, x2d])
-            skip1 = Concatenate(axis=-1)([x1i, x1d])
+            x4d = Conv2D(512, 3, padding="same")(x4d)
+            skip4 = Add()([x4i, x4d])
+            x3d = Conv2D(256, 3, padding="same")(x3d)
+            skip3 = Add()([x3i, x3d])
+            x2d = Conv2D(128, 3, padding="same")(x2d)
+            skip2 = Add()([x2i, x2d])
+            x1d = Conv2D(64, 3, padding="same")(x1d)
+            skip1 = Add()([x1i, x1d])
 
         bridge = Concatenate(axis=-1,name="fusion_encoders")([b1, p4d])
         b1 = convolution(bridge, gf * 8,pool=False,residual=self.residual)
@@ -464,11 +484,7 @@ class landslide():
 
 
         nconv0= num_layer(backbone,'normalization')
-        nconv1= num_layer(backbone,'block1a_activation')
-        nconv2= num_layer(backbone,'block2a_activation')
-        nconv3= num_layer(backbone,'block3a_activation')
-        nconv4= num_layer(backbone,'block4a_activation')
-    
+
         nconv1= num_layer(backbone,'block2a_expand_activation')
         nconv2= num_layer(backbone,'block3a_expand_activation')
         nconv3= num_layer(backbone,'block4a_expand_activation')
@@ -507,10 +523,14 @@ class landslide():
             skip2=x2i
             skip1=x1i
         else:
-            skip4 = Concatenate(axis=-1)([x4i, x4d])
-            skip3 = Concatenate(axis=-1)([x3i, x3d])
-            skip2 = Concatenate(axis=-1)([x2i, x2d])
-            skip1 = Concatenate(axis=-1)([x1i, x1d])
+            x4d = Conv2D(240, 3, padding="same")(x4d)
+            skip4 = Add()([x4i, x4d])
+            x3d = Conv2D(144, 3, padding="same")(x3d)
+            skip3 = Add()([x3i, x3d])
+            x2d = Conv2D(96, 3, padding="same")(x2d)
+            skip2 = Add()([x2i, x2d])
+            x1d = Conv2D(3, 3, padding="same")(x1d)
+            skip1 = Add()([x1i, x1d])
 
 
         x = attention_up_and_concate(bridge,skip4)
@@ -623,10 +643,10 @@ class landslide():
         
         inputs_dem = Input(self.img_shape_dem,name="input_dem")
         """ Encoder dem """
-        x1d, p1d = convolution(inputs_dem, self.gf/2,pool=True,residual=self.residual)
-        x2d, p2d = convolution(p1d, self.gf ,pool=True,residual=self.residual)
-        x3d, p3d = convolution(p2d, self.gf * 2,pool=True,residual=self.residual)
-        x4d, p4d = convolution(p3d, self.gf * 3,pool=True,residual=self.residual)
+        x1d, p1d = convolution(inputs_dem, self.gf,pool=True,residual=self.residual)
+        x2d, p2d = convolution(p1d, self.gf * 2 ,pool=True,residual=self.residual)
+        x3d, p3d = convolution(p2d, self.gf * 3,pool=True,residual=self.residual)
+        x4d, p4d = convolution(p3d, self.gf * 4,pool=True,residual=self.residual)
 
         bridge = Concatenate(axis=-1,name="fusion_encoders")([p4i, p4d])
     #    bridge = p4d
@@ -643,10 +663,10 @@ class landslide():
             skip2=x2i
             skip1=x1i
         else:
-            skip4 = Concatenate(axis=-1)([x4i, x4d])
-            skip3 = Concatenate(axis=-1)([x3i, x3d])
-            skip2 = Concatenate(axis=-1)([x2i, x2d])
-            skip1 = Concatenate(axis=-1)([x1i, x1d])
+            skip4 = Add()([x4i, x4d])
+            skip3 = Add()([x3i, x3d])
+            skip2 = Add()([x2i, x2d])
+            skip1 = Add()([x1i, x1d])
 
         """ Decoder """
         x = attention_up_and_concate(b1,skip4)
@@ -678,7 +698,8 @@ class landslide():
             tf.keras.callbacks.ModelCheckpoint(filepath='%s/models/model-{epoch:05d}-{loss:.5f}-{val_loss:.5f}.h5'%self.filepath_save,
                                                save_best_only=False,
                                                save_weights_only=False,
-                                               monitor = 'accuracy',
+                                               #monitor = ['accuracy','val_meanIoU'],
+                                               monitor = 'val_meanIoU',
                                                verbose=2,
                                                save_freq='epoch',class_weight=class_weight),
         ]       # update_freq log a batch-level summary every N
