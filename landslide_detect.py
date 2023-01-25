@@ -21,7 +21,7 @@ import numpy as np
 from keras import backend as K
 
 
-from dataloader_landslide import DataGenerator,DataGenerator_oldnorm
+from dataloader_landslide import DataGenerator,DataGenerator_oldnorm,MixUpGenerator,MixUpGenerator_oldnorm
 
 
 import numpy as np
@@ -206,6 +206,7 @@ DEF_INITIAL_LR=0.001
 DEF_FILTERS=32
 DEF_DECAY_STEPS = 1000
 DEF_DECAY_RATE = 0.9
+DEF_ALPHA = 0.2
 
 alpha = [1.62916784,0.49345255,0.94459565,3.32227727]
 sumalpha = np.sum(alpha)
@@ -254,7 +255,7 @@ class landslide():
                  decay_steps=DEF_DECAY_STEPS,
                  gf=DEF_FILTERS,
                  dropout_rate=DEF_DROPOUT,
-                 concaten_dem_only=False,concaten_ima_only=False,efficientnet=False,nores=False,vgg=False,pretrain='pretrain',train_back=False,resnet=False):
+                 concaten_dem_only=False,concaten_ima_only=False,efficientnet=False,nores=False,vgg=False,pretrain='pretrain',train_back=False,resnet=False,mixup=False,alpha_mixup=DEF_ALPHA):
 
         self.dataset_img= dataset_img
         self.dataset_dem= dataset_dem
@@ -279,6 +280,8 @@ class landslide():
         self.efficientnet = efficientnet
         self.vgg=vgg
         self.resnet=resnet
+        self.mixup=mixup
+        self.alpha_mixup=alpha_mixup
         self.train_back=train_back
         self.pretrain=pretrain
         self.dropout_rate=dropout_rate
@@ -946,14 +949,25 @@ class landslide():
                                                save_freq='epoch'),#,class_weight=class_weight),
         ]       # update_freq log a batch-level summary every N
         if self.efficientnet is False:
-            training_generator = DataGenerator(self.dataset_img,
-                                               self.dataset_dem,
-                                               self.dataset_mask,
-                                               self.img_shape_in,
-                                               self.img_shape_out,
-                                               batch_size=batch_size,
-                                               type='train',
-                                               shuffle=True)
+            if self.mixup is False:
+                training_generator = DataGenerator(self.dataset_img,
+                                                   self.dataset_dem,
+                                                   self.dataset_mask,
+                                                   self.img_shape_in,
+                                                   self.img_shape_out,
+                                                   batch_size=batch_size,
+                                                   type='train',
+                                                   shuffle=True)
+            else:
+                training_generator = MixUpGenerator(self.dataset_img,
+                                                   self.dataset_dem,
+                                                   self.dataset_mask,
+                                                   self.img_shape_in,
+                                                   self.img_shape_out,
+                                                   batch_size=batch_size,
+                                                   type='train',
+                                                   shuffle=True,alpha=self.alpha_mixup)
+
             valid_generator = DataGenerator(self.path_val_img,
                                             self.path_val_dem,
                                             self.path_val_mask,
@@ -963,14 +977,26 @@ class landslide():
                                             type='val',
                                             shuffle=False)
         else:
-            training_generator = DataGenerator_oldnorm(self.dataset_img,
-                                               self.dataset_dem,
-                                               self.dataset_mask,
-                                               self.img_shape_in,
-                                               self.img_shape_out,
-                                               batch_size=batch_size,
-                                               type='train',
-                                               shuffle=True)
+            if self.mixup is False:
+
+                training_generator = DataGenerator_oldnorm(self.dataset_img,
+                                                           self.dataset_dem,
+                                                           self.dataset_mask,
+                                                           self.img_shape_in,
+                                                           self.img_shape_out,
+                                                           batch_size=batch_size,
+                                                           type='train',
+                                                           shuffle=True)
+            else:
+                training_generator = MixUpGenerator_oldnorm(self.dataset_img,
+                                                            self.dataset_dem,
+                                                            self.dataset_mask,
+                                                            self.img_shape_in,
+                                                            self.img_shape_out,
+                                                            batch_size=batch_size,
+                                                            type='train',
+                                                            shuffle=True,alpha=self.alpha_mixup)
+
             valid_generator = DataGenerator_oldnorm(self.path_val_img,
                                             self.path_val_dem,
                                             self.path_val_mask,
@@ -1034,6 +1060,9 @@ if __name__ == '__main__':
                         help="Decay steps (default : %d)"%DEF_DECAY_STEPS)
     parser.add_argument("--decay_rate", type=float, default=DEF_DECAY_RATE,
                         help="Decay rate (default : %f)"%DEF_DECAY_RATE)
+    parser.add_argument("--mixup", help="Use mixup",action="store_true")
+    parser.add_argument("--alpha", type=float, default=DEF_ALPHA,
+                        help="Alpha coef in beta function for mixup (if mixup is True. default : %f)"%DEF_ALPHA)
     parser.add_argument("--efficientnet", help="Use efficientnet backcone",action="store_true")
     parser.add_argument("--vgg", help="Use VGG16 backcone",action="store_true")
     parser.add_argument("--resnet", help="Use ResNet backcone",action="store_true")
@@ -1071,6 +1100,8 @@ if __name__ == '__main__':
     pretrain = args.pretrain
     vgg = args.vgg
     resnet = args.resnet
+    mixup = args.mixup
+    alpha_mixup = args.alpha
     train_back = args.train_backbone
     dropout_rate = args.dropout
 
@@ -1107,14 +1138,12 @@ if __name__ == '__main__':
     fid.write('Dataset val mask : %s\n'%path_val_mask)
     fid.write('Batch size : %d\n'%batch_size)
     fid.write('Epochs : %d\n'%epochs)
+    if mixup is True:
+        fid.write('Use MixUp data augmentation with alpha = %f\n'%alpha_mixup)
     fid.write('Dropout Rate : %f\n'%dropout_rate)
     fid.write('Size im (col,lig) : %d x %d \n'%(ncols,nrows))
     fid.write('Channels (in, out)  : %d x %d \n'%(ch_in,ch_out))
     fid.write('Number of filters  : %d \n'%(gf))
-    fid.write('--------------------\n')
-    fid.write('Losses\n')
-    fid.write('--------------------\n')
-    fid.write('--------------------\n')
     if concaten_dem_only is True:
         fid.write('Use image only in decoder\n')
     elif concaten_ima_only is True:
@@ -1172,7 +1201,7 @@ if __name__ == '__main__':
                  decay_rate=decay_rate,
                  decay_steps=decay_steps,
                  dropout_rate=dropout_rate,
-                 gf=gf,concaten_ima_only=concaten_ima_only,concaten_dem_only=concaten_dem_only,efficientnet=efficientnet,nores=nores,vgg=vgg,pretrain=pretrain,train_back=train_back,resnet=resnet)
+                 gf=gf,concaten_ima_only=concaten_ima_only,concaten_dem_only=concaten_dem_only,efficientnet=efficientnet,nores=nores,vgg=vgg,pretrain=pretrain,train_back=train_back,resnet=resnet,mixup=mixup,alpha_mixup=alpha_mixup)
     if os.path.exists(pretrain):
         print('---------------------------------')
         print('load pretrain model %s'%pretrain)
