@@ -96,6 +96,11 @@ class DataGenerator(tensorflow.keras.utils.Sequence):
             y = self.imread_mask(path_out_temp_classes[nimg_path])
             ima = self.imread(path_in_temp_ima[nimg_path])
             dem = self.imread_dem(path_in_temp_dem[nimg_path])
+            if  self.type=='train' and np.random.random() < 0.5:
+                y = np.fliplr(y)
+                ima = np.fliplr(ima)
+                dem = np.fliplr(dem)
+
 
             y_t.append(y)
             ima_t.append(ima)

@@ -6,7 +6,7 @@ import tensorflow as tf
 import tensorflow.compat.v1 as tf
 #tf.disable_v2_behavior()
 from tensorflow.keras.regularizers import l2
-from tensorflow.keras.layers import Input, Dense, Reshape, Flatten, Dropout, Concatenate
+from tensorflow.keras.layers import Input, Dense, Reshape, Flatten, Dropout, Concatenate,SpatialDropout2D
 from tensorflow.keras.layers import BatchNormalization, Activation, ZeroPadding2D
 from tensorflow.keras.layers import LeakyReLU,ReLU,Add, PReLU,add
 from tensorflow.keras.layers import UpSampling2D, Conv2D, MaxPooling2D, Conv2DTranspose, SeparableConv2D
@@ -27,6 +27,81 @@ from dataloader_landslide import DataGenerator,DataGenerator_oldnorm
 import numpy as np
 import os
 import skimage.io
+
+
+def dyn_weighted_bincrossentropy(true, pred):
+    """
+    Calculates weighted binary cross entropy. The weights are determined dynamically
+    by the balance of each category. This weight is calculated for each batch.
+    
+    The weights are calculted by determining the number of 'pos' and 'neg' classes
+    in the true labels, then dividing by the number of total predictions.
+    
+    For example if there is 1 pos class, and 99 neg class, then the weights are 1/100 and 99/100.
+    These weights can be applied so false negatives are weighted 99/100, while false postives are weighted
+    1/100. This prevents the classifier from labeling everything negative and getting 99% accuracy.
+    
+    This can be useful for unbalanced catagories.
+    """
+    # get the total number of inputs
+    num_pred = keras.backend.sum(keras.backend.cast(pred < 0.5, true.dtype)) + keras.backend.sum(true)
+    
+    # get weight of values in 'pos' category
+    zero_weight =  keras.backend.sum(true)/ num_pred +  keras.backend.epsilon()
+    
+    # get weight of values in 'false' category
+    one_weight = keras.backend.sum(keras.backend.cast(pred < 0.5, true.dtype)) / num_pred +  keras.backend.epsilon()
+
+    # calculate the weight vector
+    weights =  (1.0 - true) * zero_weight +  true * one_weight
+    
+    # calculate the binary cross entropy
+    bin_crossentropy = keras.backend.binary_crossentropy(true, pred)
+    
+    # apply the weights
+    weighted_bin_crossentropy = weights * bin_crossentropy
+
+    return keras.backend.mean(weighted_bin_crossentropy)
+
+
+def weighted_bincrossentropy(true, pred, weight_zero = 0.25, weight_one = 1):
+    """
+    Calculates weighted binary cross entropy. The weights are fixed.
+        
+    This can be useful for unbalanced catagories.
+    
+    Adjust the weights here depending on what is required.
+    
+    For example if there are 10x as many positive classes as negative classes,
+        if you adjust weight_zero = 1.0, weight_one = 0.1, then false positives
+        will be penalize 10 times as much as false negatives.
+    """
+  
+    # calculate the binary cross entropy
+    bin_crossentropy = keras.backend.binary_crossentropy(true, pred)
+    
+    # apply the weights
+    weights = true * weight_one + (1. - true) * weight_zero
+    weighted_bin_crossentropy = weights * bin_crossentropy
+
+    return keras.backend.mean(weighted_bin_crossentropy)
+    
+    
+def my_grad(x1,x2):
+    gx1,gy1=tf.image.image_gradients(x1)
+    gx2,gy2=tf.image.image_gradients(x2)
+    norm1=tf.math.sqrt(gx1*gx1+gy1*gy1)
+    norm2=tf.math.sqrt(gx2*gx2+gy2*gy2)
+    loss=tf.math.reduce_mean(tf.multiply(norm1-norm2,norm1-norm2))
+    return K.mean(loss)
+
+def my_loss(coef_focal=1.,coef_grad=0.1):
+    def loss_function(y_true,y_pred):
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+        loss=coef_focal*tf.keras.losses.BinaryFocalCrossentropy()(y_true,y_pred)+coef_grad*my_grad(y_true,y_pred)
+        return K.mean(loss)
+    return loss_function
 
 def binary_focal_loss(gamma=2., alpha=.25):
     """
@@ -116,6 +191,7 @@ def categorical_focal_loss(alpha, gamma=2.):
     return categorical_focal_loss_fixed
 
 DEF_BATCH_SIZE = 10
+DEF_DROPOUT = 0.2
 DEF_EPOCHS = 50
 DEF_CUDA = "0"
 DEF_COLS = 256
@@ -128,9 +204,8 @@ DEF_PATH_PRETRAIN=''
 DEF_README='readme_model.txt'
 DEF_INITIAL_LR=0.001
 DEF_FILTERS=32
-DEF_DECAY_STEPS = 100000000
+DEF_DECAY_STEPS = 1000
 DEF_DECAY_RATE = 0.9
-DEF_CUSTOM_OBJECTS={'categorical_focal_loss':categorical_focal_loss,'binary_focal_loss':binary_focal_loss,'categorical_focal_loss_fixed':categorical_focal_loss(alpha=[[.125, 1.8, 1.,1.6,0.16,1.7,.11]], gamma=2.),'binary_focal_loss_fixed':binary_focal_loss(gamma=2., alpha=.25)}
 
 alpha = [1.62916784,0.49345255,0.94459565,3.32227727]
 sumalpha = np.sum(alpha)
@@ -158,6 +233,7 @@ def f1_m(y_true, y_pred):
     recall = recall_m(y_true, y_pred)
     return 2*((precision*recall)/(precision+recall+K.epsilon()))
 
+DEF_CUSTOM_OBJECTS={'categorical_focal_loss':categorical_focal_loss,'binary_focal_loss':binary_focal_loss,'categorical_focal_loss_fixed':categorical_focal_loss(alpha=[[.125, 1.8, 1.,1.6,0.16,1.7,.11]], gamma=2.),'binary_focal_loss_fixed':binary_focal_loss(gamma=2., alpha=.25),'my_loss':my_loss,'my_grad':my_grad,'loss_function':my_loss(coef_focal=1.,coef_grad=0.1),'f1_m':f1_m,'dyn_weighted_bincrossentropy':dyn_weighted_bincrossentropy,'weighted_bincrossentropy':weighted_bincrossentropy}
 
 
 class landslide():
@@ -176,7 +252,9 @@ class landslide():
                  initial_lr=DEF_INITIAL_LR,
                  decay_rate=DEF_DECAY_RATE,
                  decay_steps=DEF_DECAY_STEPS,
-                 gf=DEF_FILTERS,concaten_dem_only=False,concaten_ima_only=False,efficientnet=False,nores=False,vgg=False,pretrain='pretrain',trainvgg=False):
+                 gf=DEF_FILTERS,
+                 dropout_rate=DEF_DROPOUT,
+                 concaten_dem_only=False,concaten_ima_only=False,efficientnet=False,nores=False,vgg=False,pretrain='pretrain',train_back=False,resnet=False):
 
         self.dataset_img= dataset_img
         self.dataset_dem= dataset_dem
@@ -200,8 +278,10 @@ class landslide():
         self.concaten_dem_only = concaten_dem_only
         self.efficientnet = efficientnet
         self.vgg=vgg
-        self.trainvgg=trainvgg
+        self.resnet=resnet
+        self.train_back=train_back
         self.pretrain=pretrain
+        self.dropout_rate=dropout_rate
         # Use residual convolution blocks
         if nores is True:
             self.residual=False
@@ -226,9 +306,9 @@ class landslide():
         lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
             initial_learning_rate=self.initial_lr,
             decay_steps=self.decay_steps,
-            decay_rate=self.decay_rate)
+            decay_rate=self.decay_rate,staircase=True)
 #        optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule,beta_1=0.9,beta_2=0.999)
-        optimizer = tf.keras.optimizers.Adam()
+        optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule)
         #optimizer = Adam(0.0002, 0.5)
 
         # -------------------------
@@ -253,6 +333,13 @@ class landslide():
                                                           self.gf,
                                                           self.concaten_dem_only,
                                                           self.concaten_ima_only)
+        elif self.resnet:
+            self.generator = self.landslide_attention_resnet(self.img_shape_in,
+                                                          self.img_shape_dem,
+                                                          self.channels_out,
+                                                          self.gf,
+                                                          self.concaten_dem_only,
+                                                          self.concaten_ima_only)
         else:
             self.generator = self.landslide_attention()
         print('Generator build')
@@ -261,7 +348,11 @@ class landslide():
         #                       optimizer=optimizer)
 
 
-        self.generator.compile(loss=tf.keras.losses.BinaryFocalCrossentropy(),
+#        self.generator.compile(loss=tf.keras.losses.BinaryCrossentropy(),
+        #self.generator.compile(loss=dyn_weighted_bincrossentropy,
+        self.generator.compile(loss=dyn_weighted_bincrossentropy,
+#        self.generator.compile(loss=my_loss(),
+
                        metrics=['accuracy', f1_m, tf.keras.metrics.BinaryIoU()],
                        optimizer=optimizer)
 #        self.generator.compile(loss=tf.keras.losses.BinaryCrossentropy(),
@@ -285,6 +376,7 @@ class landslide():
             x = Activation("relu")(x)
             if pool:
                 p = MaxPool2D((2, 2))(x)
+                p=SpatialDropout2D(self.dropout_rate)(p)
                 return x, p
             else:
                 return x
@@ -306,6 +398,7 @@ class landslide():
             x = Add()([x, xi])
             if pool:
                 p = MaxPool2D((2, 2))(x)
+                p=SpatialDropout2D(self.dropout_rate)(p)
                 return x, p
             else:
                 return x
@@ -329,6 +422,7 @@ class landslide():
             layer = attention_block_2d(x=layer, g=up, inter_channel=in_channel // 4)
             my_concat = Lambda(lambda x: K.concatenate([x[0], x[1]], axis=3))
             concate = my_concat([up, layer])
+            concate=SpatialDropout2D(self.dropout_rate)(concate)
             return concate
             
         def convolution(blockInput, num_filters,pool=False,residual=True):
@@ -345,7 +439,7 @@ class landslide():
         inputs_ima = Input(self.img_shape_in,name="input_image")
         """ Pre-trained VGG16 Model """
         vgg16 = VGG16(include_top=False, weights="imagenet", input_tensor=inputs_ima)
-        if self.trainvgg is False:
+        if self.train_back is False:
             for layer in vgg16.layers:
                 layer.trainable=False
         
@@ -405,11 +499,10 @@ class landslide():
 
         
 
+    def landslide_attention_resnet(self,img_shape_in,img_shape_dem,channels_out,
+                                gf,concaten_dem_only,concaten_ima_only):
+        from tensorflow.keras.applications import ResNet50
 
-
-    def landslide_attention_efficientnet(self,img_shape_in,img_shape_dem,channels_out,gf,concaten_dem_only,concaten_ima_only):
-        from tensorflow.keras.applications import EfficientNetB0
-        dropout_rate=0.
         def conv_block(inputs, filters, pool=True):
             x = Conv2D(filters, 3, padding="same")(inputs)
 
@@ -421,6 +514,148 @@ class landslide():
             x = Activation("relu")(x)
             if pool:
                 p = MaxPool2D((2, 2))(x)
+                p = SpatialDropout2D(self.dropout_rate)(p)
+
+                return x, p
+            else:
+                return x
+                
+        def convolution_block(x, filters, size, strides=(1,1), padding='same', activation=True):
+            x = Conv2D(filters, size, strides=strides, padding=padding)(x)
+            x = BatchNormalization()(x)
+            if activation == True:
+                x = LeakyReLU(alpha=0.1)(x)
+            return x
+
+        def residual_block(blockInput, num_filters=16,pool=False):
+            xi = Conv2D(num_filters, (3, 3), activation=None, padding="same")(blockInput)
+            x = LeakyReLU(alpha=0.1)(xi)
+            x = BatchNormalization()(x)
+            xi = BatchNormalization()(xi)
+            x = convolution_block(x, num_filters, (3,3) )
+            x = convolution_block(x, num_filters, (3,3), activation=False)
+            x = Add()([x, xi])
+            if pool:
+                p = MaxPool2D((2, 2))(x)
+                p = SpatialDropout2D(self.dropout_rate)(p)
+                return x, p
+            else:
+                return x
+                
+        def attention_block_2d(x, g, inter_channel):
+            # theta_x(?,g_height,g_width,inter_channel)
+            theta_x = Conv2D(inter_channel, [1, 1], strides=[1, 1])(x)
+            # phi_g(?,g_height,g_width,inter_channel)
+            phi_g = Conv2D(inter_channel, [1, 1], strides=[1, 1])(g)
+            # f(?,g_height,g_width,inter_channel)
+            f = Activation('relu')(add([theta_x, phi_g]))
+            # psi_f(?,g_height,g_width,1)
+            psi_f = Conv2D(1, [1, 1], strides=[1, 1])(f)
+            rate = Activation('sigmoid')(psi_f)
+            att_x = multiply([x, rate])
+            return att_x
+
+        def attention_up_and_concate(down_layer, layer):
+            in_channel = down_layer.get_shape().as_list()[3]
+            up = UpSampling2D(size=(2, 2))(down_layer)
+            layer = attention_block_2d(x=layer, g=up, inter_channel=in_channel // 4)
+            my_concat = Lambda(lambda x: K.concatenate([x[0], x[1]], axis=3))
+            concate = my_concat([up, layer])
+            concate = SpatialDropout2D(self.dropout_rate)(concate)
+            return concate
+            
+        def convolution(blockInput, num_filters,pool=False,residual=True):
+            if residual is True:
+                return residual_block(blockInput, num_filters,pool=pool)
+            else:
+                return conv_block(blockInput, num_filters,pool=pool)
+
+
+
+
+            
+        """ Encoder image """
+        inputs_ima = Input(self.img_shape_in,name="input_image")
+        """ Pre-trained VGG16 Model """
+#        vgg16 = VGG16(include_top=False, weights="imagenet", input_tensor=inputs_ima)
+        resnet50 = ResNet50(include_top=False, weights="imagenet", input_tensor=inputs_ima)
+        if self.train_back is False:
+            for layer in resnet50.layers:
+                layer.trainable=False
+        
+        """ Encoder """
+        x1i = resnet50.get_layer("input_image").output         ## (512 x 512)
+        x2i = resnet50.get_layer("conv1_relu").output         ## (256 x 256)
+        x3i = resnet50.get_layer("conv2_block3_out").output         ## (128 x 128)
+        x4i = resnet50.get_layer("conv3_block4_out").output         ## (64 x 64)
+        """ Bridge """
+        b1 = resnet50.get_layer("conv4_block6_out").output         ## (32 x 32)
+
+        inputs_dem = Input(self.img_shape_dem,name="input_dem")
+        """ Encoder dem """
+        x1d, p1d = convolution(inputs_dem, self.gf/2,pool=True,residual=self.residual)
+        x2d, p2d = convolution(p1d, self.gf ,pool=True,residual=self.residual)
+        x3d, p3d = convolution(p2d, self.gf * 2,pool=True,residual=self.residual)
+        x4d, p4d = convolution(p3d, self.gf * 3,pool=True,residual=self.residual)
+        if self.concaten_dem_only is True:
+            skip4=x4d
+            skip3=x3d
+            skip2=x2d
+            skip1=x1d
+        elif self.concaten_ima_only is True:
+            skip4=x4i
+            skip3=x3i
+            skip2=x2i
+            skip1=x1i
+        else:
+            x4d = Conv2D(512, 3, padding="same")(x4d)
+            skip4 = Add()([x4i, x4d])
+            x3d = Conv2D(256, 3, padding="same")(x3d)
+            skip3 = Add()([x3i, x3d])
+            x2d = Conv2D(64, 3, padding="same")(x2d)
+            skip2 = Add()([x2i, x2d])
+            x1d = Conv2D(3, 3, padding="same")(x1d)
+            skip1 = Add()([x1i, x1d])
+
+        bridge = Concatenate(axis=-1,name="fusion_encoders")([b1, p4d])
+        b1 = convolution(bridge, gf * 8,pool=False,residual=self.residual)
+        """ Decoder """
+        """ Concaten DEM only """
+        x = attention_up_and_concate(b1,skip4)
+        x = convolution(x, 4 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x, skip3)
+        x = convolution(x, 3 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x,skip2)
+        x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x,skip1)
+        x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+
+
+
+
+        """ Output layer """
+        output = Conv2D(self.channels_out, 1, padding="same", activation="sigmoid")(x)
+        return Model([inputs_ima,inputs_dem], output)
+
+        
+
+
+
+
+    def landslide_attention_efficientnet(self,img_shape_in,img_shape_dem,channels_out,gf,concaten_dem_only,concaten_ima_only):
+        from tensorflow.keras.applications import EfficientNetB0
+        def conv_block(inputs, filters, pool=True):
+            x = Conv2D(filters, 3, padding="same")(inputs)
+
+            x = BatchNormalization()(x)
+            x = Activation("relu")(x)
+
+            x = Conv2D(filters, 3, padding="same")(x)
+            x = BatchNormalization()(x)
+            x = Activation("relu")(x)
+            if pool:
+                p = MaxPool2D((2, 2))(x)
+                p = SpatialDropout2D(self.dropout_rate)(p)
                 return x, p
             else:
                 return x
@@ -442,6 +677,7 @@ class landslide():
             x = Add()([x, blockInput])
             if pool:
                 p = MaxPool2D((2, 2))(x)
+                p = SpatialDropout2D(self.dropout_rate)(p)
                 return x, p
             else:
                 return x
@@ -467,6 +703,7 @@ class landslide():
             layer = attention_block_2d(x=layer, g=up, inter_channel=in_channel // 4)
             my_concat = Lambda(lambda x: K.concatenate([x[0], x[1]], axis=3))
             concate = my_concat([up, layer])
+            concate = SpatialDropout2D(self.dropout_rate)(concate)
             return concate
         def num_layer(model,name_layer):
             for i in range(len(model.layers)):
@@ -563,7 +800,7 @@ class landslide():
         x = residual_block(x,gf * 1)
         x = LeakyReLU(alpha=0.1)(x)
     
-        x = Dropout(dropout_rate/2)(x)
+        x = Dropout(self.dropout_rate/2)(x)
         output_layer = Conv2D(channels_out, (1,1), padding="same", activation="sigmoid")(x)
         return Model([input,input_dem], output_layer)
 
@@ -580,6 +817,7 @@ class landslide():
             x = Activation("relu")(x)
             if pool:
                 p = MaxPool2D((2, 2))(x)
+                p = SpatialDropout2D(self.dropout_rate)(p)
                 return x, p
             else:
                 return x
@@ -601,6 +839,7 @@ class landslide():
             x = Add()([x, xi])
             if pool:
                 p = MaxPool2D((2, 2))(x)
+                p = SpatialDropout2D(self.dropout_rate)(p)
                 return x, p
             else:
                 return x
@@ -624,6 +863,7 @@ class landslide():
             layer = attention_block_2d(x=layer, g=up, inter_channel=in_channel // 4)
             my_concat = Lambda(lambda x: K.concatenate([x[0], x[1]], axis=3))
             concate = my_concat([up, layer])
+            concate = SpatialDropout2D(self.dropout_rate)(concate)
             return concate
             
         def convolution(blockInput, num_filters,pool=False,residual=True):
@@ -691,17 +931,19 @@ class landslide():
         # -- Callbacks
         # Parameters
         start_time = datetime.datetime.now()
-        class_weight={0: 0.1, 1: 1}
+        #class_weight={0: 0, 1: 0}
 
         callbacks = [
-            tf.keras.callbacks.EarlyStopping(patience=435,monitor = 'val_loss'),
+#            tf.keras.callbacks.EarlyStopping(patience=435,monitor = 'val_loss'),
+            tf.keras.callbacks.EarlyStopping(patience=75,monitor = 'val_loss',start_from_epoch=100),
             tf.keras.callbacks.ModelCheckpoint(filepath='%s/models/model-{epoch:05d}-{loss:.5f}-{val_loss:.5f}.h5'%self.filepath_save,
-                                               save_best_only=False,
+#            tf.keras.callbacks.ModelCheckpoint(filepath='%s/models/model-{epoch:05d}-{loss:.5f}-{accuracy:.5f}.h5'%self.filepath_save,
+                                               save_best_only=True,
                                                save_weights_only=False,
                                                #monitor = ['accuracy','val_meanIoU'],
-                                               monitor = 'val_meanIoU',
+                                               monitor = 'val_loss',
                                                verbose=2,
-                                               save_freq='epoch',class_weight=class_weight),
+                                               save_freq='epoch'),#,class_weight=class_weight),
         ]       # update_freq log a batch-level summary every N
         if self.efficientnet is False:
             training_generator = DataGenerator(self.dataset_img,
@@ -742,7 +984,9 @@ class landslide():
         print('------------------------------------')
         print('Start training (batch size %d)' % batch_size)
         print('------------------------------------')
-        hist = self.generator.fit(training_generator,validation_data=valid_generator,validation_steps=2,epochs=epochs,callbacks=callbacks)
+        #hist = self.generator.fit(training_generator,validation_data=valid_generator,validation_steps=2,epochs=epochs,callbacks=callbacks)
+        hist = self.generator.fit(training_generator,validation_data=valid_generator,validation_steps=1,epochs=epochs,callbacks=callbacks)
+        return hist
 
 
 if __name__ == '__main__':
@@ -776,6 +1020,8 @@ if __name__ == '__main__':
                         help="channels in output (default : %d)"%DEF_CH_OUT)
     parser.add_argument("--ch_in", type=int, default=DEF_CH_IN,
                         help="channels in input (default : %d)"%DEF_CH_IN)
+    parser.add_argument("--dropout", type=float, default=DEF_DROPOUT,
+                        help="dropout rate (default : %f)"%DEF_DROPOUT)
     parser.add_argument("--gpu_ids", type=str, default=DEF_CUDA,
                         help="priority for GPU (default : %s)"%DEF_CUDA)
     parser.add_argument("--pretrain", type=str, default=DEF_PATH_PRETRAIN,
@@ -790,7 +1036,8 @@ if __name__ == '__main__':
                         help="Decay rate (default : %f)"%DEF_DECAY_RATE)
     parser.add_argument("--efficientnet", help="Use efficientnet backcone",action="store_true")
     parser.add_argument("--vgg", help="Use VGG16 backcone",action="store_true")
-    parser.add_argument("--trainvgg", help="Train also VGG16 parameters (if vgg)",action="store_true")
+    parser.add_argument("--resnet", help="Use ResNet backcone",action="store_true")
+    parser.add_argument("--train_backbone", help="Train also the backcone (VGG16 or ResNet50) parameters (if vgg or resnet)",action="store_true")
     parser.add_argument("--concat_ima", help="Concatene image only in decoder (instead of images and DEM by default)",action="store_true")
     parser.add_argument("--concat_dem", help="Concatene DEM only in decoder (instead of images and DEM by default)",action="store_true")
     parser.add_argument("--nores", help="Use classic convolutions instead of residual ones",action="store_true")
@@ -823,7 +1070,9 @@ if __name__ == '__main__':
     nores = args.nores
     pretrain = args.pretrain
     vgg = args.vgg
-    trainvgg = args.trainvgg
+    resnet = args.resnet
+    train_back = args.train_backbone
+    dropout_rate = args.dropout
 
     pretrain=args.pretrain
     config = tf.ConfigProto()
@@ -858,6 +1107,7 @@ if __name__ == '__main__':
     fid.write('Dataset val mask : %s\n'%path_val_mask)
     fid.write('Batch size : %d\n'%batch_size)
     fid.write('Epochs : %d\n'%epochs)
+    fid.write('Dropout Rate : %f\n'%dropout_rate)
     fid.write('Size im (col,lig) : %d x %d \n'%(ncols,nrows))
     fid.write('Channels (in, out)  : %d x %d \n'%(ch_in,ch_out))
     fid.write('Number of filters  : %d \n'%(gf))
@@ -873,9 +1123,15 @@ if __name__ == '__main__':
         fid.write('Use Images and DEM in decoder\n')
     if efficientnet is True:
         fid.write('Use Efficientnet backbone encoder\n')
+    if resnet is True:
+        fid.write('Use ResNet backbone encoder\n')
+        if train_back is True:
+            fid.write('Retrain ResNet encoder\n')
+        else:
+            fid.write('Freeze ResNet encoder\n')
     if vgg is True:
         fid.write('Use VGG backbone encoder\n')
-        if trainvgg is True:
+        if train_back is True:
             fid.write('Retrain VGG encoder\n')
         else:
             fid.write('Freeze VGG encoder\n')
@@ -915,7 +1171,8 @@ if __name__ == '__main__':
                  initial_lr=initial_lr,
                  decay_rate=decay_rate,
                  decay_steps=decay_steps,
-                 gf=gf,concaten_ima_only=concaten_ima_only,concaten_dem_only=concaten_dem_only,efficientnet=efficientnet,nores=nores,vgg=vgg,pretrain=pretrain,trainvgg=trainvgg)
+                 dropout_rate=dropout_rate,
+                 gf=gf,concaten_ima_only=concaten_ima_only,concaten_dem_only=concaten_dem_only,efficientnet=efficientnet,nores=nores,vgg=vgg,pretrain=pretrain,train_back=train_back,resnet=resnet)
     if os.path.exists(pretrain):
         print('---------------------------------')
         print('load pretrain model %s'%pretrain)

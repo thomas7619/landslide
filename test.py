@@ -46,10 +46,192 @@ DEF_CH_IN = 3
 coef=[2.8,0.2,1]
 DEF_MODE_NORM='01'
 list_out = [0,1,2,3,4,5,255]
-#DEF_META= {'driver': 'PNG', 'dtype': 'uint8', 'nodata': None, 'width': 256, 'height': 256, 'count': 1, 'crs': None, 'transform': rio.transform.Affine(1.0, 0.0, 0.0,
-#       0.0, 1.0, 0.0)}
-def vide_loss(x1,x2):
-    return x1+x2
+
+
+def dyn_weighted_bincrossentropy(true, pred):
+    """
+    Calculates weighted binary cross entropy. The weights are determined dynamically
+    by the balance of each category. This weight is calculated for each batch.
+    
+    The weights are calculted by determining the number of 'pos' and 'neg' classes
+    in the true labels, then dividing by the number of total predictions.
+    
+    For example if there is 1 pos class, and 99 neg class, then the weights are 1/100 and 99/100.
+    These weights can be applied so false negatives are weighted 99/100, while false postives are weighted
+    1/100. This prevents the classifier from labeling everything negative and getting 99% accuracy.
+    
+    This can be useful for unbalanced catagories.
+    """
+    # get the total number of inputs
+    num_pred = keras.backend.sum(keras.backend.cast(pred < 0.5, true.dtype)) + keras.backend.sum(true)
+    
+    # get weight of values in 'pos' category
+    zero_weight =  keras.backend.sum(true)/ num_pred +  keras.backend.epsilon()
+    
+    # get weight of values in 'false' category
+    one_weight = keras.backend.sum(keras.backend.cast(pred < 0.5, true.dtype)) / num_pred +  keras.backend.epsilon()
+
+    # calculate the weight vector
+    weights =  (1.0 - true) * zero_weight +  true * one_weight
+    
+    # calculate the binary cross entropy
+    bin_crossentropy = keras.backend.binary_crossentropy(true, pred)
+    
+    # apply the weights
+    weighted_bin_crossentropy = weights * bin_crossentropy
+
+    return keras.backend.mean(weighted_bin_crossentropy)
+
+
+def weighted_bincrossentropy(true, pred, weight_zero = 0.25, weight_one = 1):
+    """
+    Calculates weighted binary cross entropy. The weights are fixed.
+        
+    This can be useful for unbalanced catagories.
+    
+    Adjust the weights here depending on what is required.
+    
+    For example if there are 10x as many positive classes as negative classes,
+        if you adjust weight_zero = 1.0, weight_one = 0.1, then false positives
+        will be penalize 10 times as much as false negatives.
+    """
+  
+    # calculate the binary cross entropy
+    bin_crossentropy = keras.backend.binary_crossentropy(true, pred)
+    
+    # apply the weights
+    weights = true * weight_one + (1. - true) * weight_zero
+    weighted_bin_crossentropy = weights * bin_crossentropy
+
+    return keras.backend.mean(weighted_bin_crossentropy)
+    
+    
+def my_grad(x1,x2):
+    gx1,gy1=tf.image.image_gradients(x1)
+    gx2,gy2=tf.image.image_gradients(x2)
+    norm1=tf.math.sqrt(gx1*gx1+gy1*gy1)
+    norm2=tf.math.sqrt(gx2*gx2+gy2*gy2)
+    loss=tf.math.reduce_mean(tf.multiply(norm1-norm2,norm1-norm2))
+    return K.mean(loss)
+
+def my_loss(coef_focal=1.,coef_grad=0.1):
+    def loss_function(y_true,y_pred):
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
+        loss=coef_focal*tf.keras.losses.BinaryFocalCrossentropy()(y_true,y_pred)+coef_grad*my_grad(y_true,y_pred)
+        return K.mean(loss)
+    return loss_function
+
+def binary_focal_loss(gamma=2., alpha=.25):
+    """
+    Binary form of focal loss.
+      FL(p_t) = -alpha * (1 - p_t)**gamma * log(p_t)
+      where p = sigmoid(x), p_t = p or 1 - p depending on if the label is 1 or 0, respectively.
+    References:
+        https://arxiv.org/pdf/1708.02002.pdf
+    Usage:
+     model.compile(loss=[binary_focal_loss(alpha=.25, gamma=2)], metrics=["accuracy"], optimizer=adam)
+    """
+
+    def binary_focal_loss_fixed(y_true, y_pred):
+        """
+        :param y_true: A tensor of the same shape as `y_pred`
+        :param y_pred:  A tensor resulting from a sigmoid
+        :return: Output tensor.
+        """
+        y_true = tf.cast(y_true, tf.float32)
+        # Define epsilon so that the back-propagation will not result in NaN for 0 divisor case
+        epsilon = K.epsilon()
+        # Add the epsilon to prediction value
+        # y_pred = y_pred + epsilon
+        # Clip the prediciton value
+        y_pred = K.clip(y_pred, epsilon, 1.0 - epsilon)
+        # Calculate p_t
+        p_t = tf.where(K.equal(y_true, 1), y_pred, 1 - y_pred)
+        # Calculate alpha_t
+        alpha_factor = K.ones_like(y_true) * alpha
+        alpha_t = tf.where(K.equal(y_true, 1), alpha_factor, 1 - alpha_factor)
+        # Calculate cross entropy
+        cross_entropy = -K.log(p_t)
+        weight = alpha_t * K.pow((1 - p_t), gamma)
+        # Calculate focal loss
+        loss = weight * cross_entropy
+        # Sum the losses in mini_batch
+        loss = K.mean(K.sum(loss, axis=1))
+        return loss
+
+    return binary_focal_loss_fixed
+
+def categorical_focal_loss(alpha, gamma=2.):
+    """
+    Softmax version of focal loss.
+    When there is a skew between different categories/labels in your data set, you can try to apply this function as a
+    loss.
+           m
+      FL = ∑  -alpha * (1 - p_o,c)^gamma * y_o,c * log(p_o,c)
+          c=1
+      where m = number of classes, c = class and o = observation
+    Parameters:
+      alpha -- the same as weighing factor in balanced cross entropy. Alpha is used to specify the weight of different
+      categories/labels, the size of the array needs to be consistent with the number of classes.
+      gamma -- focusing parameter for modulating factor (1-p)
+    Default value:
+      gamma -- 2.0 as mentioned in the paper
+      alpha -- 0.25 as mentioned in the paper
+    References:
+        Official paper: https://arxiv.org/pdf/1708.02002.pdf
+        https://www.tensorflow.org/api_docs/python/tf/keras/backend/categorical_crossentropy
+    Usage:
+     model.compile(loss=[categorical_focal_loss(alpha=[[.25, .25, .25]], gamma=2)], metrics=["accuracy"], optimizer=adam)
+    """
+
+    alpha = np.array(alpha, dtype=np.float32)
+
+    def categorical_focal_loss_fixed(y_true, y_pred):
+        """
+        :param y_true: A tensor of the same shape as `y_pred`
+        :param y_pred: A tensor resulting from a softmax
+        :return: Output tensor.
+        """
+
+        # Clip the prediction value to prevent NaN's and Inf's
+        epsilon = K.epsilon()
+        y_pred = K.clip(y_pred, epsilon, 1. - epsilon)
+
+        # Calculate Cross Entropy
+        cross_entropy = -y_true * K.log(y_pred)
+
+        # Calculate Focal Loss
+        loss = alpha * K.pow(1 - y_pred, gamma) * cross_entropy
+
+        # Compute mean loss in mini_batch
+        return K.mean(K.sum(loss, axis=-1))
+
+    return categorical_focal_loss_fixed
+
+DEF_BATCH_SIZE = 10
+DEF_EPOCHS = 50
+DEF_CUDA = "0"
+DEF_COLS = 256
+DEF_ROWS=256
+# nombre de classes
+DEF_CH_OUT = 1
+DEF_CH_IN = 3
+DEF_PATH_SAVE='./save'
+DEF_PATH_PRETRAIN=''
+DEF_README='readme_model.txt'
+DEF_INITIAL_LR=0.001
+DEF_FILTERS=32
+DEF_DECAY_STEPS = 100000000
+DEF_DECAY_RATE = 0.9
+
+alpha = [1.62916784,0.49345255,0.94459565,3.32227727]
+sumalpha = np.sum(alpha)
+alphanorm=alpha/sumalpha
+invalphat = 1/alphanorm
+suminvalpha = np.sum(invalphat)
+alpha_inv= invalphat/suminvalpha
+
 
 def recall_m(y_true, y_pred):
     true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
@@ -69,14 +251,8 @@ def f1_m(y_true, y_pred):
     recall = recall_m(y_true, y_pred)
     return 2*((precision*recall)/(precision+recall+K.epsilon()))
 
-DEF_CUSTOM_OBJECTS={'binary_focal_loss':vide_loss,
-                    'binary_focal_loss_fixed':vide_loss,
-                    'categorical_focal_loss':vide_loss,
-                    'categorical_focal_loss_fixed':vide_loss,
-                    'myloss':vide_loss,'vide_loss':vide_loss,
-                    'f1_m':f1_m,
-                    'precision_m':precision_m,
-                    'recall_m':recall_m}
+DEF_CUSTOM_OBJECTS={'categorical_focal_loss':categorical_focal_loss,'binary_focal_loss':binary_focal_loss,'categorical_focal_loss_fixed':categorical_focal_loss(alpha=[[.125, 1.8, 1.,1.6,0.16,1.7,.11]], gamma=2.),'binary_focal_loss_fixed':binary_focal_loss(gamma=2., alpha=.25),'my_loss':my_loss,'my_grad':my_grad,'loss_function':my_loss(coef_focal=1.,coef_grad=0.1),'f1_m':f1_m,'dyn_weighted_bincrossentropy':dyn_weighted_bincrossentropy,'weighted_bincrossentropy':weighted_bincrossentropy}
+
 
 def change_model(model_name,newname):
     model=tf.keras.models.load_model(model_name,custom_objects=DEF_CUSTOM_OBJECTS)
@@ -328,6 +504,15 @@ if __name__ == '__main__':
     #commande='\rm %s'%newname
     #print('remove tempo files')
     #os.system.commande(commande)
+    print('save_data')
+
+    if ground_truth is not None:
+        if compar_path is not None:
+            if not os.path.isdir(compar_path):
+                os.makedirs(compar_path)
+        model_test.save_data_and_gt(pred,ground_truth,output_path,compar_path)
+    else:
+        model_test.save_data(pred,output_folder=output_path)
 
     print('Evaluation : ')
     if ground_truth is not None:
@@ -340,15 +525,6 @@ if __name__ == '__main__':
             fid.write('%s = %f\n' %(names_eva[i],eval[i]))
         fid.close()
 
-    print('save_data')
-
-    if ground_truth is not None:
-        if compar_path is not None:
-            if not os.path.isdir(compar_path):
-                os.makedirs(compar_path)
-        model_test.save_data_and_gt(pred,ground_truth,output_path,compar_path)
-    else:
-        model_test.save_data(pred,output_folder=output_path)
 
 
         
