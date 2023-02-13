@@ -114,7 +114,7 @@ class DataGenerator(tensorflow.keras.utils.Sequence):
             y_t.append(y)
             ima_t.append(ima)
             dem_t.append(dem)
-        y = np.array(y_t)/DEF_NORM
+        y = np.array(y_t)
         ima = np.array(ima_t)/DEF_NORM
         dem = np.array(dem_t)/DEF_NORM
         return {'input_image': ima, 'input_dem': dem},y
@@ -274,7 +274,7 @@ class MixUpGenerator(tensorflow.keras.utils.Sequence):
             y_t.append(y)
             ima_t.append(ima)
             dem_t.append(dem)
-        y = np.array(y_t)/DEF_NORM
+        y = np.array(y_t)
         ima = np.array(ima_t)/DEF_NORM
         dem = np.array(dem_t)/DEF_NORM
 #        return {'input_image': ima, 'input_dem': dem},y
@@ -446,7 +446,7 @@ class MixUp3_Generator(tensorflow.keras.utils.Sequence):
             y_t.append(y)
             ima_t.append(ima)
             dem_t.append(dem)
-        y = np.array(y_t)/DEF_NORM
+        y = np.array(y_t)
         ima = np.array(ima_t)/DEF_NORM
         dem = np.array(dem_t)/DEF_NORM
 #        return {'input_image': ima, 'input_dem': dem},y
@@ -592,7 +592,7 @@ class DataGenerator_oldnorm(tensorflow.keras.utils.Sequence):
             y_t.append(y)
             ima_t.append(ima)
             dem_t.append(dem)
-        y = np.array(y_t)/DEF_NORM
+        y = np.array(y_t)
         ima = np.array(ima_t)/DEF_NORM
         dem = np.array(dem_t)/DEF_NORM
         return {'input_1': ima, 'input_2': dem},y
@@ -752,7 +752,7 @@ class MixUpGenerator_oldnorm(tensorflow.keras.utils.Sequence):
             y_t.append(y)
             ima_t.append(ima)
             dem_t.append(dem)
-        y = np.array(y_t)/DEF_NORM
+        y = np.array(y_t)
         ima = np.array(ima_t)/DEF_NORM
         dem = np.array(dem_t)/DEF_NORM
 #        return {'input_image': ima, 'input_dem': dem},y
@@ -927,7 +927,7 @@ class MixUp3_Generator_oldnorm(tensorflow.keras.utils.Sequence):
             y_t.append(y)
             ima_t.append(ima)
             dem_t.append(dem)
-        y = np.array(y_t)/DEF_NORM
+        y = np.array(y_t)
         ima = np.array(ima_t)/DEF_NORM
         dem = np.array(dem_t)/DEF_NORM
 #        return {'input_image': ima, 'input_dem': dem},y

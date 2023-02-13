@@ -204,7 +204,7 @@ DEF_PATH_PRETRAIN=''
 DEF_README='readme_model.txt'
 DEF_INITIAL_LR=0.001
 DEF_FILTERS=32
-DEF_DECAY_STEPS = 1000
+DEF_DECAY_STEPS = 500
 DEF_DECAY_RATE = 0.9
 DEF_ALPHA = 0.2
 
@@ -946,7 +946,8 @@ class landslide():
         callbacks = [
 #            tf.keras.callbacks.EarlyStopping(patience=435,monitor = 'val_loss'),
             tf.keras.callbacks.EarlyStopping(patience=75,monitor = 'val_loss',start_from_epoch=100),
-            tf.keras.callbacks.ModelCheckpoint(filepath='%s/models/model-{epoch:05d}-{loss:.5f}-{val_loss:.5f}.h5'%self.filepath_save,
+#            tf.keras.callbacks.ModelCheckpoint(filepath='%s/models/model-{epoch:05d}-{loss:.5f}-{val_loss:.5f}.h5'%self.filepath_save,
+            tf.keras.callbacks.ModelCheckpoint(filepath='%s/models/best_current_model.h5'%self.filepath_save,
 #            tf.keras.callbacks.ModelCheckpoint(filepath='%s/models/model-{epoch:05d}-{loss:.5f}-{accuracy:.5f}.h5'%self.filepath_save,
                                                save_best_only=True,
                                                save_weights_only=False,
