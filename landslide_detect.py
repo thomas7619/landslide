@@ -259,7 +259,7 @@ class landslide():
                  decay_steps=DEF_DECAY_STEPS,
                  gf=DEF_FILTERS,
                  dropout_rate=DEF_DROPOUT,
-                 concaten_dem_only=False,concaten_ima_only=False,efficientnet=False,nores=False,vgg=False,pretrain='pretrain',train_back=False,resnet=False,mixup=False,mixup3=False,alpha_mixup=DEF_ALPHA):
+                 concaten_dem_only=False,concaten_ima_only=False,efficientnet=False,nores=False,vgg=False,pretrain='pretrain',train_back=False,resnet=False,mixup=False,mixup3=False,alpha_mixup=DEF_ALPHA,concat=False):
 
         self.dataset_img= dataset_img
         self.dataset_dem= dataset_dem
@@ -295,6 +295,10 @@ class landslide():
             self.residual=False
         else:
             self.residual=True
+        if concat is True:
+            self.fusion = False
+        else:
+            self.fusion = True
 
         # Configure data loader
 
@@ -327,29 +331,49 @@ class landslide():
         # Build the generator
         if self.pretrain != '':
             self.generator =load_model(pretrain,custom_objects=DEF_CUSTOM_OBJECTS)
-        elif self.efficientnet:
-            self.generator = self.landslide_attention_efficientnet(self.img_shape_in,
-                                                                   self.img_shape_dem,
-                                                                   self.channels_out,
-                                                                   self.gf,
-                                                                   self.concaten_dem_only,
-                                                                   self.concaten_ima_only)
-        elif self.vgg:
-            self.generator = self.landslide_attention_vgg(self.img_shape_in,
-                                                          self.img_shape_dem,
-                                                          self.channels_out,
-                                                          self.gf,
-                                                          self.concaten_dem_only,
-                                                          self.concaten_ima_only)
-        elif self.resnet:
-            self.generator = self.landslide_attention_resnet(self.img_shape_in,
-                                                          self.img_shape_dem,
-                                                          self.channels_out,
-                                                          self.gf,
-                                                          self.concaten_dem_only,
-                                                          self.concaten_ima_only)
+        elif self.fusion is True:
+            if self.efficientnet:
+                self.generator = self.landslide_attention_efficientnet(self.img_shape_in,
+                                                                       self.img_shape_dem,
+                                                                       self.channels_out,
+                                                                       self.gf,
+                                                                       self.concaten_dem_only,
+                                                                       self.concaten_ima_only)
+            elif self.vgg:
+                self.generator = self.landslide_attention_vgg(self.img_shape_in,
+                                                              self.img_shape_dem,
+                                                              self.channels_out,
+                                                              self.gf,
+                                                              self.concaten_dem_only,
+                                                              self.concaten_ima_only)
+            elif self.resnet:
+                self.generator = self.landslide_attention_resnet(self.img_shape_in,
+                                                                 self.img_shape_dem,
+                                                                 self.channels_out,
+                                                                 self.gf,
+                                                                 self.concaten_dem_only,
+                                                                 self.concaten_ima_only)
+            else:
+                self.generator = self.landslide_attention()
         else:
-            self.generator = self.landslide_attention()
+            if self.efficientnet:
+                self.generator = self.landslide_attention_efficientnet_concate(self.img_shape_in,
+                                                                               self.img_shape_dem,
+                                                                               self.channels_out,
+                                                                               self.gf)
+            elif self.vgg:
+                self.generator = self.landslide_attention_vgg_concate(self.img_shape_in,
+                                                                      self.img_shape_dem,
+                                                                      self.channels_out,
+                                                                      self.gf)
+            elif self.resnet:
+                self.generator = self.landslide_attention_resnet_concate(self.img_shape_in,
+                                                                         self.img_shape_dem,
+                                                                         self.channels_out,
+                                                                         self.gf)
+            else:
+                self.generator = self.landslide_attention_concate()
+
         print('Generator build')
         #self.generator.compile(loss=binary_focal_loss(gamma=2., alpha=.25),
         #                       metrics=['accuracy',f1_m, tf.keras.metrics.BinaryIoU()],
@@ -508,6 +532,133 @@ class landslide():
         return Model([inputs_ima,inputs_dem], output)
 
         
+    def landslide_attention_vgg_concate(self,img_shape_in,img_shape_dem,channels_out,gf):
+        from tensorflow.keras.applications import VGG16
+
+        def conv_block(inputs, filters, pool=True):
+            x = Conv2D(filters, 3, padding="same")(inputs)
+
+            x = BatchNormalization()(x)
+            x = Activation("relu")(x)
+
+            x = Conv2D(filters, 3, padding="same")(x)
+            x = BatchNormalization()(x)
+            x = Activation("relu")(x)
+            if pool:
+                p = MaxPool2D((2, 2))(x)
+                p=SpatialDropout2D(self.dropout_rate)(p)
+                return x, p
+            else:
+                return x
+                
+        def convolution_block(x, filters, size, strides=(1,1), padding='same', activation=True):
+            x = Conv2D(filters, size, strides=strides, padding=padding)(x)
+            x = BatchNormalization()(x)
+            if activation == True:
+                x = LeakyReLU(alpha=0.1)(x)
+            return x
+
+        def residual_block(blockInput, num_filters=16,pool=False):
+            xi = Conv2D(num_filters, (3, 3), activation=None, padding="same")(blockInput)
+            x = LeakyReLU(alpha=0.1)(xi)
+            x = BatchNormalization()(x)
+            xi = BatchNormalization()(xi)
+            x = convolution_block(x, num_filters, (3,3) )
+            x = convolution_block(x, num_filters, (3,3), activation=False)
+            x = Add()([x, xi])
+            if pool:
+                p = MaxPool2D((2, 2))(x)
+                p=SpatialDropout2D(self.dropout_rate)(p)
+                return x, p
+            else:
+                return x
+                
+        def attention_block_2d(x, g, inter_channel):
+            # theta_x(?,g_height,g_width,inter_channel)
+            theta_x = Conv2D(inter_channel, [1, 1], strides=[1, 1])(x)
+            # phi_g(?,g_height,g_width,inter_channel)
+            phi_g = Conv2D(inter_channel, [1, 1], strides=[1, 1])(g)
+            # f(?,g_height,g_width,inter_channel)
+            f = Activation('relu')(add([theta_x, phi_g]))
+            # psi_f(?,g_height,g_width,1)
+            psi_f = Conv2D(1, [1, 1], strides=[1, 1])(f)
+            rate = Activation('sigmoid')(psi_f)
+            att_x = multiply([x, rate])
+            return att_x
+
+        def attention_up_and_concate(down_layer, layer):
+            in_channel = down_layer.get_shape().as_list()[3]
+            up = UpSampling2D(size=(2, 2))(down_layer)
+            layer = attention_block_2d(x=layer, g=up, inter_channel=in_channel // 4)
+            my_concat = Lambda(lambda x: K.concatenate([x[0], x[1]], axis=3))
+            concate = my_concat([up, layer])
+            concate=SpatialDropout2D(self.dropout_rate)(concate)
+            return concate
+            
+        def convolution(blockInput, num_filters,pool=False,residual=True):
+            if residual is True:
+                return residual_block(blockInput, num_filters,pool=pool)
+            else:
+                return conv_block(blockInput, num_filters,pool=pool)
+
+
+
+
+            
+        """ Encoder image """
+        inputs_ima = Input(self.img_shape_in,name="input_image")
+        inputs_dem = Input(self.img_shape_dem,name="input_dem")
+
+        """ Pre-trained VGG16 Model """
+        vgg16 = VGG16(include_top=False, weights="imagenet", input_shape=self.img_shape_in)
+        if self.train_back is False:
+            for layer in vgg16.layers:
+                layer.trainable=False
+
+        encoder_layers = [layer for layer in vgg16.layers]
+
+        # Empiler les entrées
+        x =  Concatenate(axis=-1)([inputs_ima, inputs_dem])
+        x = convolution(x,10,pool=False,residual=self.residual)
+        x = convolution(x,3,pool=False,residual=self.residual)
+        # Appliquer le modèle VGG16 aux entrées empilées
+        for layer in encoder_layers[1:]:
+            x = layer(x)
+            if layer.name=='block1_conv2':
+                x1i=x
+            elif layer.name=='block2_conv2':
+                x2i=x
+            elif layer.name=='block3_conv2':
+                x3i=x
+            elif layer.name=='block4_conv2':
+                x4i=x
+            elif layer.name=='block5_conv3':
+                b1=x
+                break
+
+        """ Bridge """
+#        b1 = vgg16.get_layer("block5_conv3").output         ## (32 x 32)
+        x = convolution(x, gf * 8,pool=False,residual=self.residual)
+
+        """ Decoder """
+        x = attention_up_and_concate(b1,x4i)
+        x = convolution(x, 4 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x, x3i)
+        x = convolution(x, 3 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x,x2i)
+        x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x,x1i)
+        x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+
+
+
+
+        """ Output layer """
+        output = Conv2D(self.channels_out, 1, padding="same", activation="sigmoid")(x)
+        return Model([inputs_ima,inputs_dem], output)
+
+
+
 
     def landslide_attention_resnet(self,img_shape_in,img_shape_dem,channels_out,
                                 gf,concaten_dem_only,concaten_ima_only):
@@ -651,6 +802,143 @@ class landslide():
 
 
 
+    def landslide_attention_resnet_concate(self,img_shape_in,img_shape_dem,channels_out,gf):
+        from tensorflow.keras.applications import ResNet50
+
+        def conv_block(inputs, filters, pool=True):
+            x = Conv2D(filters, 3, padding="same")(inputs)
+
+            x = BatchNormalization()(x)
+            x = Activation("relu")(x)
+
+            x = Conv2D(filters, 3, padding="same")(x)
+            x = BatchNormalization()(x)
+            x = Activation("relu")(x)
+            if pool:
+                p = MaxPool2D((2, 2))(x)
+                p = SpatialDropout2D(self.dropout_rate)(p)
+
+                return x, p
+            else:
+                return x
+                
+        def convolution_block(x, filters, size, strides=(1,1), padding='same', activation=True):
+            x = Conv2D(filters, size, strides=strides, padding=padding)(x)
+            x = BatchNormalization()(x)
+            if activation == True:
+                x = LeakyReLU(alpha=0.1)(x)
+            return x
+
+        def residual_block(blockInput, num_filters=16,pool=False):
+            xi = Conv2D(num_filters, (3, 3), activation=None, padding="same")(blockInput)
+            x = LeakyReLU(alpha=0.1)(xi)
+            x = BatchNormalization()(x)
+            xi = BatchNormalization()(xi)
+            x = convolution_block(x, num_filters, (3,3) )
+            x = convolution_block(x, num_filters, (3,3), activation=False)
+            x = Add()([x, xi])
+            if pool:
+                p = MaxPool2D((2, 2))(x)
+                p = SpatialDropout2D(self.dropout_rate)(p)
+                return x, p
+            else:
+                return x
+                
+        def attention_block_2d(x, g, inter_channel):
+            # theta_x(?,g_height,g_width,inter_channel)
+            theta_x = Conv2D(inter_channel, [1, 1], strides=[1, 1])(x)
+            # phi_g(?,g_height,g_width,inter_channel)
+            phi_g = Conv2D(inter_channel, [1, 1], strides=[1, 1])(g)
+            # f(?,g_height,g_width,inter_channel)
+            f = Activation('relu')(add([theta_x, phi_g]))
+            # psi_f(?,g_height,g_width,1)
+            psi_f = Conv2D(1, [1, 1], strides=[1, 1])(f)
+            rate = Activation('sigmoid')(psi_f)
+            att_x = multiply([x, rate])
+            return att_x
+
+        def attention_up_and_concate(down_layer, layer):
+            in_channel = down_layer.get_shape().as_list()[3]
+            up = UpSampling2D(size=(2, 2))(down_layer)
+            layer = attention_block_2d(x=layer, g=up, inter_channel=in_channel // 4)
+            my_concat = Lambda(lambda x: K.concatenate([x[0], x[1]], axis=3))
+            concate = my_concat([up, layer])
+            concate = SpatialDropout2D(self.dropout_rate)(concate)
+            return concate
+            
+        def convolution(blockInput, num_filters,pool=False,residual=True):
+            if residual is True:
+                return residual_block(blockInput, num_filters,pool=pool)
+            else:
+                return conv_block(blockInput, num_filters,pool=pool)
+        def resnet3inputs():
+            """ Encoder image """
+#            inputs_ima = Input(self.img_shape_in,name="input_image")
+            in_ima = Input(self.img_shape_in,name="in_ima")
+
+            resnet50 = ResNet50(include_top=False, weights="imagenet", input_tensor=in_ima)
+
+            # Empiler les entrées
+            """ Pre-trained ResNet50 Model """
+            if self.train_back is False:
+                for layer in resnet50.layers:
+                    layer.trainable=False
+                
+            """ Encoder """
+            x1i = resnet50.get_layer("in_ima").output         ## (512 x 512)
+            x2i = resnet50.get_layer("conv1_relu").output         ## (256 x 256)
+            x3i = resnet50.get_layer("conv2_block3_out").output         ## (128 x 128)
+            x4i = resnet50.get_layer("conv3_block4_out").output         ## (64 x 64)
+            """ Bridge """
+            b1 = resnet50.get_layer("conv4_block6_out").output         ## (32 x 32)
+
+            """ Bridge """
+            x = convolution(b1, gf * 8,pool=False,residual=self.residual)
+
+            """ Decoder """
+            x = attention_up_and_concate(x,x4i)
+            x = convolution(x, 4 * gf, pool=False,residual=self.residual)
+            x = attention_up_and_concate(x, x3i)
+            x = convolution(x, 3 * gf, pool=False,residual=self.residual)
+            x = attention_up_and_concate(x,x2i)
+            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+            x = attention_up_and_concate(x,x1i)
+            x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+
+
+
+
+            """ Output layer """
+            output = Conv2D(self.channels_out, 1, padding="same", activation="sigmoid")(x)
+#            return Model(in_ima, output)
+            return output
+
+
+
+        def preprocess():
+            inputs_ima = Input(self.img_shape_in,name="input_image")
+            inputs_dem = Input(self.img_shape_dem,name="input_dem")
+            # Empiler les entrées
+            x =  Concatenate(axis=-1)([inputs_ima, inputs_dem])
+            x = convolution(x,10,pool=False,residual=self.residual)
+            x = convolution(x,3,pool=False,residual=self.residual)
+            return x
+
+        model = tf.keras.models.Sequential( [
+            tf.keras.layers.Input(shape=(self.img_shape_in),name="input_image"),
+            tf.keras.layers.Input(shape=(self.img_shape_dem),name="input_dem"),
+            preprocess(),
+            resnet3inputs()
+        ])
+        
+        return model
+           # inputs_dem = Input(self.img_shape_dem,name="input_dem")
+           # x =  Concatenate(axis=-1)([inputs_ima, inputs_dem])
+           #@ x = convolution(x,10,pool=False,residual=self.residual)
+            #x = convolution(x,3,pool=False,residual=self.residual)
+
+
+        
 
     def landslide_attention_efficientnet(self,img_shape_in,img_shape_dem,channels_out,gf,concaten_dem_only,concaten_ima_only):
         from tensorflow.keras.applications import EfficientNetB0
@@ -814,7 +1102,144 @@ class landslide():
         output_layer = Conv2D(channels_out, (1,1), padding="same", activation="sigmoid")(x)
         return Model([input,input_dem], output_layer)
 
+    def landslide_attention_efficientnet_concate(self,img_shape_in,img_shape_dem,channels_out,gf):
+        from tensorflow.keras.applications import EfficientNetB0
+        def conv_block(inputs, filters, pool=True):
+            x = Conv2D(filters, 3, padding="same")(inputs)
+
+            x = BatchNormalization()(x)
+            x = Activation("relu")(x)
+
+            x = Conv2D(filters, 3, padding="same")(x)
+            x = BatchNormalization()(x)
+            x = Activation("relu")(x)
+            if pool:
+                p = MaxPool2D((2, 2))(x)
+                p = SpatialDropout2D(self.dropout_rate)(p)
+                return x, p
+            else:
+                return x
     
+
+        def convolution_block(x, filters, size, strides=(1,1), padding='same', activation=True):
+            x = Conv2D(filters, size, strides=strides, padding=padding)(x)
+            x = BatchNormalization()(x)
+            if activation == True:
+                x = LeakyReLU(alpha=0.1)(x)
+            return x
+
+        def residual_block(blockInput, num_filters=16,pool=False):
+            x = LeakyReLU(alpha=0.1)(blockInput)
+            x = BatchNormalization()(x)
+            blockInput = BatchNormalization()(blockInput)
+            x = convolution_block(x, num_filters, (3,3) )
+            x = convolution_block(x, num_filters, (3,3), activation=False)
+            x = Add()([x, blockInput])
+            if pool:
+                p = MaxPool2D((2, 2))(x)
+                p = SpatialDropout2D(self.dropout_rate)(p)
+                return x, p
+            else:
+                return x
+
+
+
+        def attention_block_2d(x, g, inter_channel):
+            # theta_x(?,g_height,g_width,inter_channel)
+            theta_x = Conv2D(inter_channel, [1, 1], strides=[1, 1])(x)
+            # phi_g(?,g_height,g_width,inter_channel)
+            phi_g = Conv2D(inter_channel, [1, 1], strides=[1, 1])(g)
+            # f(?,g_height,g_width,inter_channel)
+            f = Activation('relu')(add([theta_x, phi_g]))
+            # psi_f(?,g_height,g_width,1)
+            psi_f = Conv2D(1, [1, 1], strides=[1, 1])(f)
+            rate = Activation('sigmoid')(psi_f)
+            att_x = multiply([x, rate])
+            return att_x
+
+        def attention_up_and_concate(down_layer, layer):
+            in_channel = down_layer.get_shape().as_list()[3]
+            up = UpSampling2D(size=(2, 2))(down_layer)
+            layer = attention_block_2d(x=layer, g=up, inter_channel=in_channel // 4)
+            my_concat = Lambda(lambda x: K.concatenate([x[0], x[1]], axis=3))
+            concate = my_concat([up, layer])
+            concate = SpatialDropout2D(self.dropout_rate)(concate)
+            return concate
+        def num_layer(model,name_layer):
+            for i in range(len(model.layers)):
+                if name_layer not in model.layers[i].name:
+                    continue
+                n=i
+                print('number layer ',i,model.layers[i].name)
+            return n
+
+        """ Encoder image """
+        #inputs = tf.keras.layers.Input(shape=img_shape_in)
+        #input = backbone(inputs)
+        """ Encoder image """
+        inputs_ima = Input(self.img_shape_in,name="input_image")
+        inputs_dem = Input(self.img_shape_dem,name="input_dem")
+        concat_input = Concatenate(axis=-1,name="fusion_encoders")([inputs_ima, inputs_dem])
+        """ Pre-trained resnet Model """
+#        vgg16 = VGG16(include_top=False, weights="imagenet", input_tensor=inputs_ima)
+        backbone = EfficientNetB0(weights='imagenet',include_top=False,input_tensor=concat_input)
+
+
+
+        nconv0= num_layer(backbone,'normalization')
+
+        nconv1= num_layer(backbone,'block2a_expand_activation')
+        nconv2= num_layer(backbone,'block3a_expand_activation')
+        nconv3= num_layer(backbone,'block4a_expand_activation')
+        nconv4= num_layer(backbone,'block6a_expand_activation')
+    
+        x1i = backbone.layers[nconv0].output # 86
+        x2i = backbone.layers[nconv1].output # 86
+        x3i = backbone.layers[nconv2].output # 144
+        x4i = backbone.layers[nconv3].output # 240
+        x5i = backbone.layers[nconv4].output # 480
+
+
+        bridge = Conv2D(gf*8,(3, 3), activation=None, padding="same")(x5i)
+        bridge = residual_block(x5i, gf * 8)
+
+        x = attention_up_and_concate(bridge,x4i)
+        x = Conv2D(gf * 8, (3, 3), activation=None, padding="same")(x)
+        x = residual_block(x,gf * 8)
+        x = residual_block(x,gf * 8)
+        x = LeakyReLU(alpha=0.1)(x)
+
+        x = attention_up_and_concate(x,x3i)
+        x = Conv2D(gf * 4, (3, 3), activation=None, padding="same")(x)
+        x = residual_block(x,gf * 4)
+        x = residual_block(x,gf * 4)
+        x = LeakyReLU(alpha=0.1)(x)
+
+        x = attention_up_and_concate(x,x2i)
+        x = Conv2D(gf * 2, (3, 3), activation=None, padding="same")(x)
+        x = residual_block(x,gf * 2)
+        x = residual_block(x,gf * 2)
+        x = LeakyReLU(alpha=0.1)(x)
+
+        x = attention_up_and_concate(x,x1i)
+        x = Conv2D(gf , (3, 3), activation=None, padding="same")(x)
+        x = residual_block(x,gf )
+        x = residual_block(x,gf )
+        x = LeakyReLU(alpha=0.1)(x)
+        
+        
+        x = Conv2D(gf * 1, (3, 3), activation=None, padding="same")(x)
+        x = residual_block(x,gf * 1)
+        x = residual_block(x,gf * 1)
+        x = LeakyReLU(alpha=0.1)(x)
+    
+        x = Dropout(self.dropout_rate/2)(x)
+        output_layer = Conv2D(channels_out, (1,1), padding="same", activation="sigmoid")(x)
+        return Model([input,input_dem], output_layer)
+
+
+
+
     def landslide_attention(self):
         def conv_block(inputs, filters, pool=True):
             x = Conv2D(filters, 3, padding="same")(inputs)
@@ -926,6 +1351,104 @@ class landslide():
         x = attention_up_and_concate(x,skip2)
         x = convolution(x, 2 * gf, pool=False,residual=self.residual)
         x = attention_up_and_concate(x,skip1)
+        x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+
+
+
+
+        """ Output layer """
+        output = Conv2D(self.channels_out, 1, padding="same", activation="sigmoid")(x)
+        return Model([inputs_ima,inputs_dem], output)
+
+    def landslide_attention_concate(self):
+        def conv_block(inputs, filters, pool=True):
+            x = Conv2D(filters, 3, padding="same")(inputs)
+
+            x = BatchNormalization()(x)
+            x = Activation("relu")(x)
+
+            x = Conv2D(filters, 3, padding="same")(x)
+            x = BatchNormalization()(x)
+            x = Activation("relu")(x)
+            if pool:
+                p = MaxPool2D((2, 2))(x)
+                p = SpatialDropout2D(self.dropout_rate)(p)
+                return x, p
+            else:
+                return x
+                
+        def convolution_block(x, filters, size, strides=(1,1), padding='same', activation=True):
+            x = Conv2D(filters, size, strides=strides, padding=padding)(x)
+            x = BatchNormalization()(x)
+            if activation == True:
+                x = LeakyReLU(alpha=0.1)(x)
+            return x
+
+        def residual_block(blockInput, num_filters=16,pool=False):
+            xi = Conv2D(num_filters, (3, 3), activation=None, padding="same")(blockInput)
+            x = LeakyReLU(alpha=0.1)(xi)
+            x = BatchNormalization()(x)
+            xi = BatchNormalization()(xi)
+            x = convolution_block(x, num_filters, (3,3) )
+            x = convolution_block(x, num_filters, (3,3), activation=False)
+            x = Add()([x, xi])
+            if pool:
+                p = MaxPool2D((2, 2))(x)
+                p = SpatialDropout2D(self.dropout_rate)(p)
+                return x, p
+            else:
+                return x
+
+        def attention_block_2d(x, g, inter_channel):
+            # theta_x(?,g_height,g_width,inter_channel)
+            theta_x = Conv2D(inter_channel, [1, 1], strides=[1, 1])(x)
+            # phi_g(?,g_height,g_width,inter_channel)
+            phi_g = Conv2D(inter_channel, [1, 1], strides=[1, 1])(g)
+            # f(?,g_height,g_width,inter_channel)
+            f = Activation('relu')(add([theta_x, phi_g]))
+            # psi_f(?,g_height,g_width,1)
+            psi_f = Conv2D(1, [1, 1], strides=[1, 1])(f)
+            rate = Activation('sigmoid')(psi_f)
+            att_x = multiply([x, rate])
+            return att_x
+
+        def attention_up_and_concate(down_layer, layer):
+            in_channel = down_layer.get_shape().as_list()[3]
+            up = UpSampling2D(size=(2, 2))(down_layer)
+            layer = attention_block_2d(x=layer, g=up, inter_channel=in_channel // 4)
+            my_concat = Lambda(lambda x: K.concatenate([x[0], x[1]], axis=3))
+            concate = my_concat([up, layer])
+            concate = SpatialDropout2D(self.dropout_rate)(concate)
+            return concate
+            
+        def convolution(blockInput, num_filters,pool=False,residual=True):
+            if residual is True:
+                return residual_block(blockInput, num_filters,pool=pool)
+            else:
+                return conv_block(blockInput, num_filters,pool=pool)
+
+                
+
+        inputs_ima = Input(self.img_shape_in,name="input_image")
+        inputs_dem = Input(self.img_shape_dem,name="input_dem")
+        concat_input = Concatenate(axis=-1,name="fusion_encoders")([inputs_ima, inputs_dem])
+        """ Encoder image """
+        x1i, p1i = convolution(concat_input, self.gf,pool=True,residual=self.residual)
+        x2i, p2i = convolution(p1i, self.gf * 2,pool=True,residual=self.residual)
+        x3i, p3i = convolution(p2i, self.gf * 3,pool=True,residual=self.residual)
+        x4i, p4i = convolution(p3i, self.gf * 4,pool=True,residual=self.residual)
+        
+
+        b1 = convolution(p4i, gf * 8,pool=False,residual=self.residual)
+
+        """ Decoder """
+        x = attention_up_and_concate(b1,x4i)
+        x = convolution(x, 4 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x, x3i)
+        x = convolution(x, 3 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x,x2i)
+        x = convolution(x, 2 * gf, pool=False,residual=self.residual)
+        x = attention_up_and_concate(x,x1i)
         x = convolution(x, 2 * gf, pool=False,residual=self.residual)
 
 
@@ -1095,6 +1618,7 @@ if __name__ == '__main__':
     parser.add_argument("--concat_ima", help="Concatene image only in decoder (instead of images and DEM by default)",action="store_true")
     parser.add_argument("--concat_dem", help="Concatene DEM only in decoder (instead of images and DEM by default)",action="store_true")
     parser.add_argument("--nores", help="Use classic convolutions instead of residual ones",action="store_true")
+    parser.add_argument("--concat", help="Use concatenation of images and dem (instead of a fusion net)",action="store_true")
     parser.add_argument("--note", type=str, default='',
                         help="Personal note for the readme file ")
 
@@ -1122,6 +1646,7 @@ if __name__ == '__main__':
     concaten_dem_only = args.concat_dem
     efficientnet = args.efficientnet
     nores = args.nores
+    concat = args.concat
     pretrain = args.pretrain
     vgg = args.vgg
     resnet = args.resnet
@@ -1166,6 +1691,11 @@ if __name__ == '__main__':
     fid.write('Dataset val mask : %s\n'%path_val_mask)
     fid.write('Batch size : %d\n'%batch_size)
     fid.write('Epochs : %d\n'%epochs)
+    if concat is True:
+        fid.write('Use concatenation of stack layers\n')
+    else:
+        fid.write('Use of a fusion network\n')
+
     if mixup is True:
         fid.write('Use MixUp (pairs) data augmentation with alpha = %f\n'%alpha_mixup)
     if mixup3 is True:
@@ -1231,7 +1761,7 @@ if __name__ == '__main__':
                  decay_rate=decay_rate,
                  decay_steps=decay_steps,
                  dropout_rate=dropout_rate,
-                 gf=gf,concaten_ima_only=concaten_ima_only,concaten_dem_only=concaten_dem_only,efficientnet=efficientnet,nores=nores,vgg=vgg,pretrain=pretrain,train_back=train_back,resnet=resnet,mixup=mixup,mixup3=mixup3,alpha_mixup=alpha_mixup)
+                 gf=gf,concaten_ima_only=concaten_ima_only,concaten_dem_only=concaten_dem_only,efficientnet=efficientnet,nores=nores,vgg=vgg,pretrain=pretrain,train_back=train_back,resnet=resnet,mixup=mixup,mixup3=mixup3,alpha_mixup=alpha_mixup,concat=concat)
     if os.path.exists(pretrain):
         print('---------------------------------')
         print('load pretrain model %s'%pretrain)
