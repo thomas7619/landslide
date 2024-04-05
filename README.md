@@ -1,4 +1,4 @@
-> cf https://docs.github.com/fr/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax 
+> cf https://docs.github.com/fr/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax
 
 Save environment here :
 ```
@@ -11,11 +11,11 @@ conda env create -f environment.yml
 ```
 (first line : name of the env that can be changed)
 
-Command to train : 
+Command to train :
 
 ```
  python landslide_detect.py --h
- 
+
 Landslide detection with attention layers and fusion image/dem
 
 options:
@@ -36,25 +36,32 @@ options:
   --nrows NROWS         numbers of rows of low res (default : 256)
   --ch_out CH_OUT       channels in output (default : 1)
   --ch_in CH_IN         channels in input (default : 3)
+  --dropout DROPOUT     dropout rate (default : 0.200000)
   --gpu_ids GPU_IDS     priority for GPU (default : 0)
   --pretrain PRETRAIN   pretrained model (default : )
   --gf GF               number of filter for the residual part (default : 32)
   --initial_lr INITIAL_LR
                         Initial learning rate (default : 0.001000)
   --decay_steps DECAY_STEPS
-                        Decay steps (default : 100000000)
+                        Decay steps (default : 500)
   --decay_rate DECAY_RATE
                         Decay rate (default : 0.900000)
+  --mixup               Use mixup (with pairs)
+  --mixup3              Use mixup (with tuples)
+  --alpha ALPHA         Alpha coef in beta function for mixup (if mixup is True. default : 0.200000)
   --efficientnet        Use efficientnet backcone
   --vgg                 Use VGG16 backcone
+  --resnet              Use ResNet backcone
+  --train_backbone      Train also the backcone (VGG16 or ResNet50) parameters (if vgg or resnet)
   --concat_ima          Concatene image only in decoder (instead of images and DEM by default)
   --concat_dem          Concatene DEM only in decoder (instead of images and DEM by default)
   --nores               Use classic convolutions instead of residual ones
+  --concat              Use concatenation of images and dem (instead of a fusion net)
   --note NOTE           Personal note for the readme file
 ```
 
 
-Command to test : 
+Command to test :
 
 ```
  python test.py --h
