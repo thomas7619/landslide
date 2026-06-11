@@ -117,6 +117,9 @@ class DataGenerator(tensorflow.keras.utils.Sequence):
         y = np.array(y_t)
         ima = np.array(ima_t)/DEF_NORM
         dem = np.array(dem_t)/DEF_NORM
+        #print('y shape', y.shape,np.min(y),np.max(y))
+        #print('ima shape', ima.shape,np.min(ima),np.max(ima))
+        #print('dem shape', dem.shape,np.min(dem),np.max(dem))
         return {'input_image': ima, 'input_dem': dem},y
 
     def __data_generation_test(self,path_in_temp,path_in_temp_dem):
@@ -146,7 +149,8 @@ class DataGenerator(tensorflow.keras.utils.Sequence):
     def imread_mask(self, path):
         #return scipy.misc.imread(path, mode='RGB').astype(np.float)
 #        return io.imread(path)
-        return io.imread(path).reshape(self.img_res[0],self.img_res[1],1)
+        im =  io.imread(path).reshape(self.img_res[0],self.img_res[1],1)
+        return (im/255.).astype(np.float32)
 
     def imread_data_16b(self,path):
         #return scipy.misc.imread(path, mode='RGB').astype(np.float)
